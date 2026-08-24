@@ -1,4 +1,11 @@
 package com.zorth.aiplatform.agent;
 
-public record AgentResponse(String content) {
+import com.fasterxml.jackson.annotation.JsonInclude;
+
+@JsonInclude(JsonInclude.Include.NON_NULL)
+public record AgentResponse(String content, String conversationId) {
+
+    public AgentResponse(String content) {
+        this(content, null);
+    }
 }

@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import com.zorth.aiplatform.agent.support.ToolContextKeys;
 import com.zorth.aiplatform.agent.tool.CalculatorTools;
+import com.zorth.aiplatform.agent.tool.DatabaseTools;
 import com.zorth.aiplatform.agent.tool.DateTools;
 import com.zorth.aiplatform.agent.tool.SystemTools;
 import com.zorth.aiplatform.core.exception.AiException;
@@ -56,13 +57,43 @@ class SpringAiAgentServiceTest {
         AgentResponse response = service.execute(new AgentRequest("question"));
 
         assertEquals("final answer", response.content());
-        verify(requestSpec).system(systemPrompt);
+        verify(requestSpec).system(org.mockito.ArgumentMatchers.contains("You are an AI assistant"));
         verify(requestSpec).user("question");
         verify(requestSpec).tools(dateTools, calculatorTools, systemTools);
         verify(requestSpec).toolContext(argThat(context ->
                 context.size() == 1
                         && "request-123".equals(context.get(ToolContextKeys.REQUEST_ID))));
         verify(requestSpec).advisors(same(toolCallingAdvisor));
+    }
+
+    @Test
+    void attachesDatabaseToolsAndServerControlledDatasourceContext() {
+        when(responseSpec.content()).thenReturn("order total is 10000");
+        DatabaseTools databaseTools = mock(DatabaseTools.class);
+        SpringAiAgentService service = new SpringAiAgentService(
+                chatClient,
+                toolCallingAdvisor,
+                systemPrompt,
+                new ClassPathResource("prompts/database-agent-system-prompt.txt"),
+                dateTools,
+                calculatorTools,
+                systemTools,
+                databaseTools,
+                () -> "request-123");
+
+        AgentResponse response = service.execute(new AgentRequest(
+                "查询今年每个月订单金额", "conv-1", "demo", "user-9"));
+
+        assertEquals("order total is 10000", response.content());
+        assertEquals("conv-1", response.conversationId());
+        verify(requestSpec).system(org.mockito.ArgumentMatchers.contains("Database Tools"));
+        verify(requestSpec).tools(dateTools, calculatorTools, systemTools, databaseTools);
+        verify(requestSpec).toolContext(argThat(context ->
+                "request-123".equals(context.get(ToolContextKeys.REQUEST_ID))
+                        && "conv-1".equals(context.get(ToolContextKeys.CONVERSATION_ID))
+                        && "user-9".equals(context.get(ToolContextKeys.USER_ID))
+                        && "demo".equals(context.get(ToolContextKeys.DATASOURCE_ID))));
+        verifyNoInteractions(databaseTools);
     }
 
     @Test

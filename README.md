@@ -11,8 +11,10 @@ AI Platform 是一个基于 Spring Boot 和 Spring AI 构建的企业 AI 应用�
 - Provider-neutral `AiAgentService`
 - Tool Calling 接口 `POST /api/v1/ai/agent`
 - Date、Date Difference、Calculator 和 System Info Tool
+- Database Agent Tools：`listTables`、`getTableSchema`、`checkSql`、`executeQuery`
+- 只读 SQL 校验、查询行数/超时/结果大小限制，以及 SQL 审计日志
 - Spring AI `ToolCallingAdvisor` 管理的多步 Tool Calling
-- Server-controlled `ToolContext` 和 request ID
+- Server-controlled `ToolContext`（request ID、conversationId、userId、datasourceId）
 - Tool 执行耗时、结果状态和安全异常处理
 - 输入校验和安全的统一异常响应
 - Actuator 健康检查
@@ -22,9 +24,7 @@ AI Platform 是一个基于 Spring Boot 和 Spring AI 构建的企业 AI 应用�
 
 以下能力属于后续阶段，当前均为 **NOT IMPLEMENTED YET**：
 
-- Database Agent / Text-to-SQL
-- Datasource、数据库元数据、SQL Guard 和 SQL Executor
-- Semantic Metadata
+- Semantic Metadata、searchTables、业务知识库
 - RAG 和 Vector Store
 - MCP
 - Chat Memory 和 Conversation 持久化
@@ -38,7 +38,7 @@ AI Platform 是一个基于 Spring Boot 和 Spring AI 构建的企业 AI 应用�
 ai-platform
 ├── ai-core         # Provider-neutral 聊天契约和 Spring AI ChatClient 适配
 ├── ai-agent        # Agent 契约、Spring AI Runtime、Tool、ToolContext 和执行日志
-├── ai-datasource   # 后续数据库能力的空模块
+├── ai-datasource   # Datasource 注册、元数据、SQL 校验和只读查询执行
 └── ai-server       # Spring Boot、REST、配置、异常处理和 Actuator
 ```
 
@@ -62,7 +62,7 @@ Client
   → AiAgentService
   → ChatClient + ToolCallingAdvisor
   → LLM decides whether to call a tool
-  → Spring Boot executes Date / Calculator / System Tool
+  → Spring Boot executes Date / Calculator / System / Database Tool
   → Spring AI returns structured Tool Result to the LLM
   → next Tool Call or final answer
 ```
@@ -177,7 +177,7 @@ curl \
 }
 ```
 
-当前 Agent 固定注册以下 Tool：
+当前 Agent 固定注册以下基础 Tool：
 
 | Tool | 用途 | 结构化结果 |
 | --- | --- | --- |
@@ -186,7 +186,59 @@ curl \
 | `calculate` | `ADD`、`SUBTRACT`、`MULTIPLY`、`DIVIDE` | `result` |
 | `getSystemInfo` | 获取当前服务名称、环境和版本 | `applicationName`, `environment`, `version` |
 
+当请求包含 `datasourceId` 时，额外注册 Database Tools：
+
+| Tool | 用途 | 结构化结果 |
+| --- | --- | --- |
+| `listTables` | 列出当前数据源中的表 | 表名列表 |
+| `getTableSchema` | 获取一张或多张表的字段、类型、主键和备注 | `TableSchema` |
+| `checkSql` | 校验 SQL 是否为单条只读 SELECT | `valid`, `errorType`, `message` |
+| `executeQuery` | 执行已校验的只读查询，并限制行数与结果大小 | `columns`, `rows`, `rowCount`, `truncated` |
+
+`datasourceId`、`conversationId`、`userId` 由服务端写入 `ToolContext`，不会出现在 Tool JSON Schema 中，模型不能伪造数据源。`executeQuery` 会再次做安全校验，不依赖模型一定先调用 `checkSql`。
+
+可选请求示例：
+
+```bash
+curl \
+  -X POST \
+  http://localhost:8080/api/v1/ai/agent \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conversationId": "conv-1",
+    "datasourceId": "demo",
+    "userId": "user-1",
+    "message": "数据库里有哪些用户相关的表？"
+  }'
+```
+
+仅发送 `{ "message": "..." }` 的旧客户端仍然有效，此时不会注册 Database Tools。`POST /api/v1/ai/chat` 保持 `{ "message": "..." }` → `{ "content": "..." }`，不会调用数据库 Tool。
+
 是否调用 Tool、调用哪个 Tool、以及是否继续调用其他 Tool，由 LLM 根据用户请求、Tool Description 和 Tool Schema 决定。普通知识问题允许直接回答，不会强制调用 Tool。
+
+### Datasource 与查询限制
+
+在 `application.yml` 中按 id 声明 JDBC 数据源，并配置查询边界：
+
+```yaml
+ai:
+  datasources:
+    demo:
+      jdbc-url: jdbc:postgresql://localhost:5432/demo
+      username: demo
+      password: ${DEMO_DB_PASSWORD:}
+      driver-class-name: org.postgresql.Driver
+  agent:
+    database:
+      max-rows: 200
+      query-timeout-seconds: 10
+      max-result-bytes: 1048576
+      max-sql-length: 10000
+      max-complexity: 12
+      include-views: false
+```
+
+对应的 JDBC 驱动需要自行放到运行时 classpath。默认配置不包含任何数据源，应用可以空注册表启动。只允许单条 `SELECT` / `WITH ... SELECT`；`INSERT`、`UPDATE`、`DELETE`、`DROP` 等写操作和 DDL 会被拒绝。
 
 ### Tool Arguments 与 ToolContext
 
@@ -195,9 +247,9 @@ curl \
 | 类型 | 来源 | LLM 是否可见 | 示例 |
 | --- | --- | --- | --- |
 | Tool Arguments | LLM 根据用户目标生成 | 是 | `left`, `right`, `operation`, `startDate`, `endDate` |
-| `ToolContext` | Spring Boot 在服务端生成 | 否 | `requestId` |
+| `ToolContext` | Spring Boot 在服务端生成 | 否 | `requestId`, `conversationId`, `userId`, `datasourceId` |
 
-`requestId` 不属于任何 Tool JSON Schema，模型无法生成或覆盖它。以后加入的认证用户、Tenant 或 Datasource 上下文也应沿用这一边界。
+`requestId` 和 `datasourceId` 不属于任何 Tool JSON Schema，模型无法生成或覆盖它们。
 
 ### Tool 执行日志
 
@@ -234,7 +286,7 @@ curl http://localhost:8080/actuator/health
 mvn clean test
 ```
 
-默认测试使用 Mock、Fake 或脚本化 `ChatModel`，不需要真实 `AI_API_KEY`，也不会访问模型服务。测试包括一个完全离线的三轮 Tool Calling 场景，用来验证 `getCurrentDate → calculateDaysBetween → final answer` 由 Spring AI Advisor 自动完成。
+默认测试使用 Mock、Fake、H2 或脚本化 `ChatModel`，不需要真实 `AI_API_KEY`，也不会访问模型服务。测试包括离线的基础 Tool Calling 场景，以及 `listTables → getTableSchema → checkSql → executeQuery` 和 SQL 失败后修正的 Database Agent 多步场景。
 
 ## 可选的真实 Provider Tool Calling 验证
 
@@ -293,5 +345,19 @@ mvn clean test
 ```
 
 确认日志记录 `toolName=calculate`、`status=FAILURE` 和 request ID。请求必须保持受控：模型可能基于 Tool 错误生成安全说明，或者 HTTP 边界返回清理后的 `AI_SERVICE_ERROR`；两种情况下都不得泄露堆栈、参数或内部配置，且后续请求仍应正常处理。
+
+### Case 7：Database Agent
+
+先配置一个只读可达的 `ai.datasources.<id>`，再请求：
+
+```json
+{
+  "conversationId": "conv-1",
+  "datasourceId": "demo",
+  "message": "查询今年每个月的订单金额。"
+}
+```
+
+一种预期路径是 `listTables → getTableSchema → checkSql → executeQuery → final answer`。日志应出现对应 `toolName` 和 `Database tool audit` 记录，包含 `datasourceId` 和 SQL。要求删除表或执行 `DELETE`/`DROP` 时必须被拒绝，且数据库中的数据不能被修改。
 
 完成验证后，清除 shell 中的敏感环境变量；不要把真实凭据写入 README、`application.yml`、测试代码或其他受版本控制的文件。

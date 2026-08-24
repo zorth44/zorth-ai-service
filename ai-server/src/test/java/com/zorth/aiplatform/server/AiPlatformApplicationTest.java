@@ -11,8 +11,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.zorth.aiplatform.agent.AiAgentService;
 import com.zorth.aiplatform.agent.model.SystemInfo;
 import com.zorth.aiplatform.agent.tool.CalculatorTools;
+import com.zorth.aiplatform.agent.tool.DatabaseTools;
 import com.zorth.aiplatform.agent.tool.DateTools;
 import com.zorth.aiplatform.agent.tool.SystemTools;
+import com.zorth.aiplatform.datasource.registry.DatasourceRegistry;
 import com.zorth.aiplatform.core.chat.AiChatService;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
@@ -58,6 +60,12 @@ class AiPlatformApplicationTest {
     @Autowired
     private SystemInfo systemInfo;
 
+    @Autowired
+    private DatabaseTools databaseTools;
+
+    @Autowired
+    private DatasourceRegistry datasourceRegistry;
+
     @Test
     void contextLoadsAndHealthDoesNotCallModel() throws Exception {
         assertNotNull(aiChatService);
@@ -65,6 +73,8 @@ class AiPlatformApplicationTest {
         assertNotNull(dateTools);
         assertNotNull(calculatorTools);
         assertNotNull(systemTools);
+        assertNotNull(databaseTools);
+        assertNotNull(datasourceRegistry);
         assertEquals(new SystemInfo("context-test-app", "context-test", "9.9.9-test"), systemInfo);
 
         mockMvc.perform(get("/actuator/health"))

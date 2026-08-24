@@ -14,6 +14,15 @@ ai:
     application-name: ${spring.application.name}
     environment: ${AI_PLATFORM_ENVIRONMENT:local}
     version: ${AI_PLATFORM_VERSION:0.0.1-SNAPSHOT}
+  datasources: {}
+  agent:
+    database:
+      max-rows: 200
+      query-timeout-seconds: 10
+      max-result-bytes: 1048576
+      max-sql-length: 10000
+      max-complexity: 12
+      include-views: false
 
 management:
   endpoints:
