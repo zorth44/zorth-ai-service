@@ -120,7 +120,7 @@ mvn clean package
 java -jar ai-server/target/ai-server-0.0.1-SNAPSHOT.jar
 ```
 
-服务默认监听 `http://localhost:8080`。
+服务默认监听 `http://localhost:8080`。和本机 `zorth-web-sql-service` 一起跑时改用 `8081`，步骤见 [docs/local-web-sql.md](docs/local-web-sql.md)。
 
 ## 聊天接口
 
@@ -185,6 +185,8 @@ curl \
 | `calculateDaysBetween` | 计算已知起止日期间的有符号天数 | `days` |
 | `calculate` | `ADD`、`SUBTRACT`、`MULTIPLY`、`DIVIDE` | `result` |
 | `getSystemInfo` | 获取当前服务名称、环境和版本 | `applicationName`, `environment`, `version` |
+
+默认 `ai.datasource.provider=web-sql`：元数据和 `executeQuery` 走 zorth-web-sql-service，`checkSql` 留在 AI 侧。本地和 SQL 编辑器联调见 [docs/local-web-sql.md](docs/local-web-sql.md)。请求带 `datasourceId` 时必须同时带 `Authorization` 和 `database`。`provider=jdbc` 只用于测试和本机 H2。
 
 当请求包含 `datasourceId` 时，额外注册 Database Tools：
 
