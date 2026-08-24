@@ -2,7 +2,10 @@ package com.zorth.aiplatform.datasource.service;
 
 import com.zorth.aiplatform.datasource.exception.DatasourceException;
 import com.zorth.aiplatform.datasource.model.ColumnSchema;
+import com.zorth.aiplatform.datasource.model.TableList;
 import com.zorth.aiplatform.datasource.model.TableSchema;
+import com.zorth.aiplatform.datasource.port.DatabaseMetadataPort;
+import com.zorth.aiplatform.datasource.port.DatasourceCall;
 import com.zorth.aiplatform.datasource.registry.DatasourceRegistry;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -16,7 +19,7 @@ import java.util.Map;
 import java.util.Objects;
 import javax.sql.DataSource;
 
-public final class DatabaseMetadataService {
+public final class DatabaseMetadataService implements DatabaseMetadataPort {
 
     private final DatasourceRegistry registry;
     private final boolean includeViews;
@@ -24,6 +27,16 @@ public final class DatabaseMetadataService {
     public DatabaseMetadataService(DatasourceRegistry registry, boolean includeViews) {
         this.registry = Objects.requireNonNull(registry, "registry must not be null");
         this.includeViews = includeViews;
+    }
+
+    @Override
+    public TableList listTables(DatasourceCall call) {
+        return TableList.complete(listTables(requireDatasourceId(call)));
+    }
+
+    @Override
+    public List<TableSchema> getTableSchemas(DatasourceCall call, List<String> tableNames) {
+        return getTableSchemas(requireDatasourceId(call), tableNames);
     }
 
     public List<String> listTables(String datasourceId) {
@@ -170,6 +183,13 @@ public final class DatabaseMetadataService {
             return true;
         }
         return null;
+    }
+
+    private static String requireDatasourceId(DatasourceCall call) {
+        if (call == null || call.datasourceId() == null || call.datasourceId().isBlank()) {
+            throw new DatasourceException("MISSING_DATASOURCE", "datasourceId is required");
+        }
+        return call.datasourceId();
     }
 
     private static String emptyToNull(String value) {

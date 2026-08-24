@@ -23,6 +23,14 @@ public final class AgentContext {
         return text(toolContext, ToolContextKeys.DATASOURCE_ID);
     }
 
+    public static String database(ToolContext toolContext) {
+        return text(toolContext, ToolContextKeys.DATABASE);
+    }
+
+    public static String authorization(ToolContext toolContext) {
+        return text(toolContext, ToolContextKeys.AUTHORIZATION);
+    }
+
     private static String text(ToolContext toolContext, String key) {
         if (toolContext == null || toolContext.getContext() == null) {
             return null;

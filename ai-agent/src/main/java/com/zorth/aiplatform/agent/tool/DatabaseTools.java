@@ -7,12 +7,14 @@ import com.zorth.aiplatform.datasource.exception.DatasourceException;
 import com.zorth.aiplatform.datasource.model.DatabaseToolFailure;
 import com.zorth.aiplatform.datasource.model.QueryResult;
 import com.zorth.aiplatform.datasource.model.SqlCheckResult;
-import com.zorth.aiplatform.datasource.service.DatabaseMetadataService;
-import com.zorth.aiplatform.datasource.service.QueryExecutionService;
+import com.zorth.aiplatform.datasource.port.DatabaseMetadataPort;
+import com.zorth.aiplatform.datasource.port.DatasourceCall;
+import com.zorth.aiplatform.datasource.port.QueryExecutionPort;
 import com.zorth.aiplatform.datasource.service.SqlValidationService;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,28 +25,49 @@ import org.springframework.ai.tool.annotation.ToolParam;
 public final class DatabaseTools {
 
     private static final Logger log = LoggerFactory.getLogger(DatabaseTools.class);
+    private static final int DEFAULT_MAX_TABLES_PER_SCHEMA_CALL = 5;
 
-    private final DatabaseMetadataService metadataService;
+    private final DatabaseMetadataPort metadataPort;
     private final SqlValidationService validationService;
-    private final QueryExecutionService queryExecutionService;
+    private final QueryExecutionPort queryExecutionPort;
     private final DatabaseToolAudit audit;
     private final ToolExecutionSupport executionSupport;
+    private final int maxTablesPerSchemaCall;
 
     public DatabaseTools(
-            DatabaseMetadataService metadataService,
+            DatabaseMetadataPort metadataPort,
             SqlValidationService validationService,
-            QueryExecutionService queryExecutionService,
+            QueryExecutionPort queryExecutionPort,
             DatabaseToolAudit audit,
             ToolExecutionSupport executionSupport) {
-        this.metadataService = Objects.requireNonNull(metadataService,
-                "metadataService must not be null");
+        this(
+                metadataPort,
+                validationService,
+                queryExecutionPort,
+                audit,
+                executionSupport,
+                DEFAULT_MAX_TABLES_PER_SCHEMA_CALL);
+    }
+
+    public DatabaseTools(
+            DatabaseMetadataPort metadataPort,
+            SqlValidationService validationService,
+            QueryExecutionPort queryExecutionPort,
+            DatabaseToolAudit audit,
+            ToolExecutionSupport executionSupport,
+            int maxTablesPerSchemaCall) {
+        this.metadataPort = Objects.requireNonNull(metadataPort, "metadataPort must not be null");
         this.validationService = Objects.requireNonNull(validationService,
                 "validationService must not be null");
-        this.queryExecutionService = Objects.requireNonNull(queryExecutionService,
-                "queryExecutionService must not be null");
+        this.queryExecutionPort = Objects.requireNonNull(queryExecutionPort,
+                "queryExecutionPort must not be null");
         this.audit = Objects.requireNonNull(audit, "audit must not be null");
         this.executionSupport = Objects.requireNonNull(executionSupport,
                 "executionSupport must not be null");
+        if (maxTablesPerSchemaCall <= 0) {
+            throw new IllegalArgumentException("maxTablesPerSchemaCall must be positive");
+        }
+        this.maxTablesPerSchemaCall = maxTablesPerSchemaCall;
     }
 
     @Tool(description = """
@@ -53,9 +76,8 @@ public final class DatabaseTools {
             before answering a database-related question.
             """)
     public Object listTables(ToolContext toolContext) {
-        return execute("listTables", toolContext, null, () -> {
-            String datasourceId = requireDatasourceId(toolContext);
-            return metadataService.listTables(datasourceId);
+        return execute("listTables", toolContext, null, null, () -> {
+            return metadataPort.listTables(call(toolContext, null));
         });
     }
 
@@ -69,9 +91,15 @@ public final class DatabaseTools {
                     required = true)
             String tableNames,
             ToolContext toolContext) {
-        return execute("getTableSchema", toolContext, tableNames, () -> {
-            String datasourceId = requireDatasourceId(toolContext);
-            return metadataService.getTableSchemas(datasourceId, splitTableNames(tableNames));
+        return execute("getTableSchema", toolContext, tableNames, null, () -> {
+            List<String> names = splitTableNames(tableNames);
+            if (names.size() > maxTablesPerSchemaCall) {
+                throw new DatasourceException(
+                        "INVALID_ARGUMENT",
+                        "Request at most " + maxTablesPerSchemaCall
+                                + " tables per getTableSchema call");
+            }
+            return metadataPort.getTableSchemas(call(toolContext, null), names);
         });
     }
 
@@ -84,7 +112,7 @@ public final class DatabaseTools {
             @ToolParam(description = "SQL query to validate", required = true)
             String sql,
             ToolContext toolContext) {
-        return execute("checkSql", toolContext, sql, () -> {
+        return execute("checkSql", toolContext, sql, null, () -> {
             requireDatasourceId(toolContext);
             return validationService.check(sql);
         });
@@ -99,9 +127,9 @@ public final class DatabaseTools {
             @ToolParam(description = "Read-only SQL query to execute", required = true)
             String sql,
             ToolContext toolContext) {
-        return execute("executeQuery", toolContext, sql, () -> {
-            String datasourceId = requireDatasourceId(toolContext);
-            return queryExecutionService.execute(datasourceId, sql);
+        String executionId = UUID.randomUUID().toString();
+        return execute("executeQuery", toolContext, sql, executionId, () -> {
+            return queryExecutionPort.execute(call(toolContext, executionId), sql);
         });
     }
 
@@ -109,6 +137,7 @@ public final class DatabaseTools {
             String toolName,
             ToolContext toolContext,
             String arguments,
+            String executionId,
             ToolAction action) {
         long startedAt = System.nanoTime();
         try {
@@ -132,6 +161,7 @@ public final class DatabaseTools {
                     toolContext,
                     toolName,
                     arguments,
+                    executionId,
                     statusOf(result),
                     elapsedMillis(startedAt),
                     rowCountOf(result),
@@ -143,12 +173,22 @@ public final class DatabaseTools {
                     toolContext,
                     toolName,
                     arguments,
+                    executionId,
                     "FAILURE",
                     elapsedMillis(startedAt),
                     null,
                     exception.getMessage());
             throw exception;
         }
+    }
+
+    private static DatasourceCall call(ToolContext toolContext, String executionId) {
+        return new DatasourceCall(
+                requireDatasourceId(toolContext),
+                AgentContext.database(toolContext),
+                AgentContext.authorization(toolContext),
+                AgentContext.requestId(toolContext),
+                executionId);
     }
 
     private static String requireDatasourceId(ToolContext toolContext) {

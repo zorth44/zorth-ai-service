@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.zorth.aiplatform.datasource.model.DatabaseToolFailure;
 import com.zorth.aiplatform.datasource.model.QueryResult;
 import com.zorth.aiplatform.datasource.model.SqlCheckResult;
+import com.zorth.aiplatform.datasource.model.TableList;
 import com.zorth.aiplatform.datasource.model.TableSchema;
 import java.util.List;
 import java.util.Map;
@@ -36,10 +37,10 @@ class DatabaseToolsTest {
 
     @Test
     void listTablesReturnsConfiguredTables() {
-        @SuppressWarnings("unchecked")
-        List<String> tables = (List<String>) tools.listTables(context);
-        assertTrue(tables.stream().anyMatch(name -> name.equalsIgnoreCase("users")));
-        assertTrue(tables.stream().anyMatch(name -> name.equalsIgnoreCase("orders")));
+        TableList tables = (TableList) tools.listTables(context);
+        assertTrue(tables.tables().stream().anyMatch(name -> name.equalsIgnoreCase("users")));
+        assertTrue(tables.tables().stream().anyMatch(name -> name.equalsIgnoreCase("orders")));
+        assertFalse(tables.truncated());
     }
 
     @Test
@@ -97,6 +98,13 @@ class DatabaseToolsTest {
     void unknownTableIsStructured() {
         DatabaseToolFailure failure = (DatabaseToolFailure) tools.getTableSchema("missing", context);
         assertEquals("TABLE_NOT_FOUND", failure.errorType());
+    }
+
+    @Test
+    void getTableSchemaRejectsMoreThanFiveTables() {
+        DatabaseToolFailure failure = (DatabaseToolFailure) tools.getTableSchema(
+                "a,b,c,d,e,f", context);
+        assertEquals("INVALID_ARGUMENT", failure.errorType());
     }
 
     @Test

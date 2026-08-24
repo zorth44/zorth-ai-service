@@ -13,24 +13,43 @@ public final class DatabaseToolAudit {
             ToolContext toolContext,
             String toolName,
             String toolArguments,
+            String executionId,
             String toolResultStatus,
             long durationMs,
             Integer queryRowCount,
             String errorMessage) {
-        log.info(
-                "Database tool audit conversationId={} userId={} datasourceId={} requestId={} "
-                        + "toolName={} toolArguments={} toolResultStatus={} durationMs={} "
-                        + "queryRowCount={} errorMessage={}",
-                value(AgentContext.conversationId(toolContext)),
-                value(AgentContext.userId(toolContext)),
-                value(AgentContext.datasourceId(toolContext)),
-                value(AgentContext.requestId(toolContext)),
+        log.info("{}", render(
+                toolContext,
                 toolName,
-                truncate(toolArguments),
+                toolArguments,
+                executionId,
                 toolResultStatus,
                 durationMs,
-                queryRowCount == null ? "-" : queryRowCount,
-                value(errorMessage));
+                queryRowCount,
+                errorMessage));
+    }
+
+    String render(
+            ToolContext toolContext,
+            String toolName,
+            String toolArguments,
+            String executionId,
+            String toolResultStatus,
+            long durationMs,
+            Integer queryRowCount,
+            String errorMessage) {
+        return "Database tool audit conversationId=" + value(AgentContext.conversationId(toolContext))
+                + " userId=" + value(AgentContext.userId(toolContext))
+                + " datasourceId=" + value(AgentContext.datasourceId(toolContext))
+                + " database=" + value(AgentContext.database(toolContext))
+                + " requestId=" + value(AgentContext.requestId(toolContext))
+                + " executionId=" + value(executionId)
+                + " toolName=" + toolName
+                + " toolArguments=" + truncate(toolArguments)
+                + " toolResultStatus=" + toolResultStatus
+                + " durationMs=" + durationMs
+                + " queryRowCount=" + (queryRowCount == null ? "-" : queryRowCount)
+                + " errorMessage=" + value(errorMessage);
     }
 
     private static String value(String text) {

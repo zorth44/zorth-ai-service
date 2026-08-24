@@ -82,7 +82,7 @@ class SpringAiAgentServiceTest {
                 () -> "request-123");
 
         AgentResponse response = service.execute(new AgentRequest(
-                "查询今年每个月订单金额", "conv-1", "demo", "user-9"));
+                "查询今年每个月订单金额", "conv-1", "demo", "user-9", "orders"));
 
         assertEquals("order total is 10000", response.content());
         assertEquals("conv-1", response.conversationId());
@@ -92,8 +92,34 @@ class SpringAiAgentServiceTest {
                 "request-123".equals(context.get(ToolContextKeys.REQUEST_ID))
                         && "conv-1".equals(context.get(ToolContextKeys.CONVERSATION_ID))
                         && "user-9".equals(context.get(ToolContextKeys.USER_ID))
-                        && "demo".equals(context.get(ToolContextKeys.DATASOURCE_ID))));
+                        && "demo".equals(context.get(ToolContextKeys.DATASOURCE_ID))
+                        && "orders".equals(context.get(ToolContextKeys.DATABASE))
+                        && !context.containsKey(ToolContextKeys.AUTHORIZATION)));
         verifyNoInteractions(databaseTools);
+    }
+
+    @Test
+    void forwardsAuthorizationInMemoryAndKeepsItOffTheRequest() {
+        when(responseSpec.content()).thenReturn("signed in");
+        DatabaseTools databaseTools = mock(DatabaseTools.class);
+        SpringAiAgentService service = new SpringAiAgentService(
+                chatClient,
+                toolCallingAdvisor,
+                systemPrompt,
+                new ClassPathResource("prompts/database-agent-system-prompt.txt"),
+                dateTools,
+                calculatorTools,
+                systemTools,
+                databaseTools,
+                () -> "request-123");
+
+        service.execute(
+                new AgentRequest("查询订单", "conv-1", "demo", "user-9", "orders"),
+                new AgentRuntimeContext("Bearer secret-token"));
+
+        verify(requestSpec).system(org.mockito.ArgumentMatchers.contains("Numeric values"));
+        verify(requestSpec).toolContext(argThat(context ->
+                "Bearer secret-token".equals(context.get(ToolContextKeys.AUTHORIZATION))));
     }
 
     @Test

@@ -29,8 +29,8 @@ class DatabaseToolSchemaTest {
         fixture.close();
     }
 
-    @Test
-    void generatedSchemasExposeOnlyModelControlledArguments() {
+        @Test
+        void generatedSchemasExposeOnlyModelControlledArguments() {
         Map<String, ToolCallback> callbacks = Arrays.stream(MethodToolCallbackProvider.builder()
                         .toolObjects(fixture.tools())
                         .build()
@@ -47,10 +47,12 @@ class DatabaseToolSchemaTest {
             String schema = callback.getToolDefinition().inputSchema();
             assertTrue(description.contains("Use this"));
             assertFalse(schema.contains(ToolContextKeys.REQUEST_ID));
-            assertFalse(schema.contains("userId"));
-            assertFalse(schema.contains("conversationId"));
-            assertFalse(schema.contains("datasourceId"));
-            assertFalse(schema.contains("executionId"));
+            assertFalse(schema.contains("\"userId\""));
+            assertFalse(schema.contains("\"conversationId\""));
+            assertFalse(schema.contains("\"datasourceId\""));
+            assertFalse(schema.contains("\"executionId\""));
+            assertFalse(schema.contains("\"database\""));
+            assertFalse(schema.contains("\"authorization\""));
         });
 
         assertTrue(callbacks.get("getTableSchema").getToolDefinition().inputSchema()

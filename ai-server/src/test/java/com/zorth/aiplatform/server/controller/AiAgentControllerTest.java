@@ -10,7 +10,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.zorth.aiplatform.agent.AgentRequest;
 import com.zorth.aiplatform.agent.AgentResponse;
+import com.zorth.aiplatform.agent.AgentRuntimeContext;
 import com.zorth.aiplatform.agent.AiAgentService;
 import com.zorth.aiplatform.core.exception.AiException;
 import org.hamcrest.Matchers;
@@ -32,7 +34,7 @@ class AiAgentControllerTest {
 
     @Test
     void returnsUnwrappedAgentResponse() throws Exception {
-        when(aiAgentService.execute(any())).thenReturn(new AgentResponse("今天是 2026-08-21。"));
+        when(aiAgentService.execute(any(), any())).thenReturn(new AgentResponse("今天是 2026-08-21。"));
 
         mockMvc.perform(post("/api/v1/ai/agent")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -45,14 +47,16 @@ class AiAgentControllerTest {
 
     @Test
     void acceptsOptionalDatabaseContextAndEchoesConversationId() throws Exception {
-        when(aiAgentService.execute(any())).thenReturn(new AgentResponse("部分订单金额如下。", "conv-1"));
+        when(aiAgentService.execute(any(), any())).thenReturn(new AgentResponse("部分订单金额如下。", "conv-1"));
 
         mockMvc.perform(post("/api/v1/ai/agent")
                         .contentType(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer secret-token")
                         .content("""
                                 {
                                   "conversationId": "conv-1",
                                   "datasourceId": "demo",
+                                  "database": "orders",
                                   "userId": "user-9",
                                   "message": "查询今年每个月订单金额"
                                 }
@@ -61,11 +65,30 @@ class AiAgentControllerTest {
                 .andExpect(jsonPath("$.content").value("部分订单金额如下。"))
                 .andExpect(jsonPath("$.conversationId").value("conv-1"));
 
-        verify(aiAgentService).execute(argThat(request ->
-                "查询今年每个月订单金额".equals(request.message())
-                        && "conv-1".equals(request.conversationId())
-                        && "demo".equals(request.datasourceId())
-                        && "user-9".equals(request.userId())));
+        verify(aiAgentService).execute(
+                argThat((AgentRequest request) ->
+                        "查询今年每个月订单金额".equals(request.message())
+                                && "conv-1".equals(request.conversationId())
+                                && "demo".equals(request.datasourceId())
+                                && "orders".equals(request.database())
+                                && "user-9".equals(request.userId())),
+                argThat((AgentRuntimeContext runtime) ->
+                        "Bearer secret-token".equals(runtime.authorization())));
+    }
+
+    @Test
+    void messageOnlyAgentDoesNotRequireAuthorization() throws Exception {
+        when(aiAgentService.execute(any(), any())).thenReturn(new AgentResponse("ok"));
+
+        mockMvc.perform(post("/api/v1/ai/agent")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"今天是几号？\"}"))
+                .andExpect(status().isOk());
+
+        verify(aiAgentService).execute(
+                argThat((AgentRequest request) ->
+                        request.datasourceId() == null && "今天是几号？".equals(request.message())),
+                argThat((AgentRuntimeContext runtime) -> runtime.authorization() == null));
     }
 
     @Test
@@ -85,7 +108,7 @@ class AiAgentControllerTest {
 
     @Test
     void sanitizesAgentOrToolFailure() throws Exception {
-        when(aiAgentService.execute(any()))
+        when(aiAgentService.execute(any(), any()))
                 .thenThrow(new AiException("tool arguments and provider detail"));
 
         mockMvc.perform(post("/api/v1/ai/agent")
@@ -101,7 +124,7 @@ class AiAgentControllerTest {
 
     @Test
     void failureIsRequestScopedAndNextRequestCanSucceed() throws Exception {
-        when(aiAgentService.execute(any()))
+        when(aiAgentService.execute(any(), any()))
                 .thenThrow(new AiException("first request failed"))
                 .thenReturn(new AgentResponse("second request succeeded"));
 

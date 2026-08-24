@@ -12,16 +12,23 @@ public record AgentRequest(
         @Size(max = 128, message = "datasourceId must not exceed 128 characters")
         String datasourceId,
         @Size(max = 128, message = "userId must not exceed 128 characters")
-        String userId) {
+        String userId,
+        @Size(max = 128, message = "database must not exceed 128 characters")
+        String database) {
 
     public AgentRequest(String message) {
-        this(message, null, null, null);
+        this(message, null, null, null, null);
+    }
+
+    public AgentRequest(String message, String conversationId, String datasourceId, String userId) {
+        this(message, conversationId, datasourceId, userId, null);
     }
 
     public AgentRequest {
         conversationId = blankToNull(conversationId);
         datasourceId = blankToNull(datasourceId);
         userId = blankToNull(userId);
+        database = blankToNull(database);
     }
 
     private static String blankToNull(String value) {

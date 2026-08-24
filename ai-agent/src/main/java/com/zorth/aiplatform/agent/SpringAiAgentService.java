@@ -98,20 +98,27 @@ public final class SpringAiAgentService implements AiAgentService {
 
     @Override
     public AgentResponse execute(AgentRequest request) {
+        return execute(request, AgentRuntimeContext.none());
+    }
+
+    @Override
+    public AgentResponse execute(AgentRequest request, AgentRuntimeContext runtime) {
         Objects.requireNonNull(request, "request must not be null");
+        AgentRuntimeContext safeRuntime = runtime == null ? AgentRuntimeContext.none() : runtime;
 
         String requestId = requestIdSupplier.get();
         long startedAt = System.nanoTime();
         boolean databaseRequest = request.datasourceId() != null && databaseTools != null;
-        log.info("Agent request started requestId={} conversationId={} datasourceId={} status=STARTED",
-                requestId, value(request.conversationId()), value(request.datasourceId()));
+        log.info("Agent request started requestId={} conversationId={} datasourceId={} database={} status=STARTED",
+                requestId, value(request.conversationId()), value(request.datasourceId()),
+                value(request.database()));
 
         try {
             String content = chatClient.prompt()
                     .system(resolveSystemPrompt(databaseRequest))
                     .user(request.message())
                     .tools(resolveTools(databaseRequest))
-                    .toolContext(toolContext(requestId, request))
+                    .toolContext(toolContext(requestId, request, safeRuntime))
                     .advisors(toolCallingAdvisor)
                     .call()
                     .content();
@@ -150,12 +157,15 @@ public final class SpringAiAgentService implements AiAgentService {
         return new Object[] {dateTools, calculatorTools, systemTools};
     }
 
-    private static Map<String, Object> toolContext(String requestId, AgentRequest request) {
+    private static Map<String, Object> toolContext(
+            String requestId, AgentRequest request, AgentRuntimeContext runtime) {
         Map<String, Object> context = new LinkedHashMap<>();
         context.put(ToolContextKeys.REQUEST_ID, requestId);
         putIfPresent(context, ToolContextKeys.CONVERSATION_ID, request.conversationId());
         putIfPresent(context, ToolContextKeys.USER_ID, request.userId());
         putIfPresent(context, ToolContextKeys.DATASOURCE_ID, request.datasourceId());
+        putIfPresent(context, ToolContextKeys.DATABASE, request.database());
+        putIfPresent(context, ToolContextKeys.AUTHORIZATION, runtime.authorization());
         return context;
     }
 

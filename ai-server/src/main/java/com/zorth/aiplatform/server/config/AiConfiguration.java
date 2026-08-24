@@ -11,23 +11,33 @@ import com.zorth.aiplatform.agent.tool.DateTools;
 import com.zorth.aiplatform.agent.tool.SystemTools;
 import com.zorth.aiplatform.core.chat.AiChatService;
 import com.zorth.aiplatform.core.chat.SpringAiChatService;
+import com.zorth.aiplatform.datasource.port.DatabaseMetadataPort;
+import com.zorth.aiplatform.datasource.port.QueryExecutionPort;
 import com.zorth.aiplatform.datasource.registry.DatasourceRegistry;
 import com.zorth.aiplatform.datasource.service.DatabaseMetadataService;
 import com.zorth.aiplatform.datasource.service.QueryExecutionService;
 import com.zorth.aiplatform.datasource.service.SqlValidationService;
+import com.zorth.aiplatform.datasource.websql.WebSqlMetadataAdapter;
+import com.zorth.aiplatform.datasource.websql.WebSqlQueryAdapter;
+import com.zorth.aiplatform.datasource.websql.WebSqlServiceClient;
+import com.zorth.aiplatform.datasource.websql.WebSqlSettings;
 import java.time.Clock;
+import java.time.Duration;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.web.client.RestClient;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties({
         AiPlatformProperties.class,
         AiDatasourceProperties.class,
-        DatabaseAgentProperties.class
+        DatabaseAgentProperties.class,
+        DatasourceProviderProperties.class
 })
 public class AiConfiguration {
 
@@ -79,16 +89,18 @@ public class AiConfiguration {
         return ToolCallingAdvisor.builder().build();
     }
 
+    @Bean
+    DatasourceProviderValidator datasourceProviderValidator(
+            DatasourceProviderProperties providerProperties,
+            AiPlatformProperties platformProperties) {
+        return new DatasourceProviderValidator(
+                providerProperties.getProvider(),
+                platformProperties.environment());
+    }
+
     @Bean(destroyMethod = "close")
     DatasourceRegistry datasourceRegistry(AiDatasourceProperties properties) {
         return new DatasourceRegistry(properties.getDatasources());
-    }
-
-    @Bean
-    DatabaseMetadataService databaseMetadataService(
-            DatasourceRegistry datasourceRegistry,
-            DatabaseAgentProperties properties) {
-        return new DatabaseMetadataService(datasourceRegistry, properties.includeViews());
     }
 
     @Bean
@@ -97,12 +109,47 @@ public class AiConfiguration {
     }
 
     @Bean
-    QueryExecutionService queryExecutionService(
+    WebSqlServiceClient webSqlServiceClient(DatasourceProviderProperties providerProperties) {
+        DatasourceProviderProperties.WebSql webSql = providerProperties.getWebSql();
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Duration.ofSeconds(webSql.getConnectTimeoutSeconds()));
+        factory.setReadTimeout(Duration.ofSeconds(webSql.getReadTimeoutSeconds()));
+        RestClient restClient = RestClient.builder()
+                .baseUrl(webSql.getBaseUrl())
+                .requestFactory(factory)
+                .build();
+        return new WebSqlServiceClient(restClient);
+    }
+
+    @Bean
+    DatabaseMetadataPort databaseMetadataPort(
+            DatasourceProviderProperties providerProperties,
+            DatasourceRegistry datasourceRegistry,
+            DatabaseAgentProperties databaseProperties,
+            WebSqlServiceClient webSqlServiceClient) {
+        if (providerProperties.jdbc()) {
+            return new DatabaseMetadataService(datasourceRegistry, databaseProperties.includeViews());
+        }
+        return new WebSqlMetadataAdapter(
+                webSqlServiceClient, webSqlSettings(providerProperties, databaseProperties));
+    }
+
+    @Bean
+    QueryExecutionPort queryExecutionPort(
+            DatasourceProviderProperties providerProperties,
             DatasourceRegistry datasourceRegistry,
             SqlValidationService sqlValidationService,
-            DatabaseAgentProperties properties) {
-        return new QueryExecutionService(
-                datasourceRegistry, sqlValidationService, properties.queryLimits());
+            DatabaseAgentProperties databaseProperties,
+            WebSqlServiceClient webSqlServiceClient) {
+        if (providerProperties.jdbc()) {
+            return new QueryExecutionService(
+                    datasourceRegistry, sqlValidationService, databaseProperties.queryLimits());
+        }
+        return new WebSqlQueryAdapter(
+                webSqlServiceClient,
+                webSqlSettings(providerProperties, databaseProperties),
+                sqlValidationService,
+                databaseProperties.queryLimits());
     }
 
     @Bean
@@ -112,17 +159,19 @@ public class AiConfiguration {
 
     @Bean
     DatabaseTools databaseTools(
-            DatabaseMetadataService databaseMetadataService,
+            DatabaseMetadataPort databaseMetadataPort,
             SqlValidationService sqlValidationService,
-            QueryExecutionService queryExecutionService,
+            QueryExecutionPort queryExecutionPort,
             DatabaseToolAudit databaseToolAudit,
-            ToolExecutionSupport executionSupport) {
+            ToolExecutionSupport executionSupport,
+            DatasourceProviderProperties providerProperties) {
         return new DatabaseTools(
-                databaseMetadataService,
+                databaseMetadataPort,
                 sqlValidationService,
-                queryExecutionService,
+                queryExecutionPort,
                 databaseToolAudit,
-                executionSupport);
+                executionSupport,
+                providerProperties.getWebSql().getMaxTablesPerSchemaCall());
     }
 
     @Bean
@@ -142,5 +191,19 @@ public class AiConfiguration {
                 calculatorTools,
                 systemTools,
                 databaseTools);
+    }
+
+    private static WebSqlSettings webSqlSettings(
+            DatasourceProviderProperties providerProperties,
+            DatabaseAgentProperties databaseProperties) {
+        DatasourceProviderProperties.WebSql webSql = providerProperties.getWebSql();
+        return new WebSqlSettings(
+                webSql.getBaseUrl(),
+                webSql.getConnectTimeoutSeconds(),
+                webSql.getReadTimeoutSeconds(),
+                webSql.getMaxTablesPerSchemaCall(),
+                webSql.getMaxListedTables(),
+                webSql.getAllowedDatasourceIds(),
+                databaseProperties.includeViews());
     }
 }

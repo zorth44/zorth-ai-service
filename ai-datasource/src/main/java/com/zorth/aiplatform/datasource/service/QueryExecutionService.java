@@ -3,6 +3,8 @@ package com.zorth.aiplatform.datasource.service;
 import com.zorth.aiplatform.datasource.config.QueryLimits;
 import com.zorth.aiplatform.datasource.exception.DatasourceException;
 import com.zorth.aiplatform.datasource.model.QueryResult;
+import com.zorth.aiplatform.datasource.port.DatasourceCall;
+import com.zorth.aiplatform.datasource.port.QueryExecutionPort;
 import com.zorth.aiplatform.datasource.registry.DatasourceRegistry;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -26,7 +28,7 @@ import java.util.Map;
 import java.util.Objects;
 import javax.sql.DataSource;
 
-public final class QueryExecutionService {
+public final class QueryExecutionService implements QueryExecutionPort {
 
     private final DatasourceRegistry registry;
     private final SqlValidationService validationService;
@@ -41,6 +43,14 @@ public final class QueryExecutionService {
         this.validationService = Objects.requireNonNull(validationService,
                 "validationService must not be null");
         this.limits = Objects.requireNonNull(limits, "limits must not be null");
+    }
+
+    @Override
+    public QueryResult execute(DatasourceCall call, String sql) {
+        if (call == null || call.datasourceId() == null || call.datasourceId().isBlank()) {
+            throw new DatasourceException("MISSING_DATASOURCE", "datasourceId is required");
+        }
+        return execute(call.datasourceId(), sql);
     }
 
     public QueryResult execute(String datasourceId, String sql) {

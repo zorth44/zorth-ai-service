@@ -14,6 +14,16 @@ ai:
     application-name: ${spring.application.name}
     environment: ${AI_PLATFORM_ENVIRONMENT:local}
     version: ${AI_PLATFORM_VERSION:0.0.1-SNAPSHOT}
+  datasource:
+    provider: ${AI_DATASOURCE_PROVIDER:web-sql}
+    web-sql:
+      base-url: ${WEB_SQL_BASE_URL:http://localhost:8080}
+      connect-timeout-seconds: 5
+      # query-timeout-seconds + 10; their HTTP layer is timeoutSeconds + 5
+      read-timeout-seconds: 20
+      max-tables-per-schema-call: 5
+      max-listed-tables: 200
+      allowed-datasource-ids: []
   datasources: {}
   agent:
     database:
