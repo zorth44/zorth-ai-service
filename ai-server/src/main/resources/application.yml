@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: ai-platform
+  ai:
+    openai:
+      api-key: ${AI_API_KEY}
+      base-url: ${AI_BASE_URL:https://api.deepseek.com}
+      chat:
+        model: ${AI_MODEL:deepseek-v4-flash}
+        temperature: 0.2
+
+ai:
+  platform:
+    application-name: ${spring.application.name}
+    environment: ${AI_PLATFORM_ENVIRONMENT:local}
+    version: ${AI_PLATFORM_VERSION:0.0.1-SNAPSHOT}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
