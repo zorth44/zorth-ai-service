@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper [
+    <!ENTITY xxe SYSTEM "file:///etc/passwd">
+]>
+<mapper namespace="com.example.security.ExternalEntityMapper">
+    <select id="findSecret" resultType="String">
+        SELECT '&xxe;' FROM t_order
+    </select>
+</mapper>

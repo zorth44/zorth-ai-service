@@ -1,6 +1,8 @@
 package com.zorth.aiplatform.server.exception;
 
 import com.zorth.aiplatform.core.exception.AiException;
+import com.zorth.aiplatform.semantic.exception.SemanticBatchException;
+import com.zorth.aiplatform.semantic.exception.SemanticGenerationAlreadyRunningException;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +27,22 @@ public class GlobalExceptionHandler {
         log.debug("Invalid AI request", exception);
         return ResponseEntity.badRequest()
                 .body(new ErrorResponse("INVALID_REQUEST", "The request is invalid"));
+    }
+
+    @ExceptionHandler(SemanticGenerationAlreadyRunningException.class)
+    ResponseEntity<ErrorResponse> handleSemanticAlreadyRunning(
+            SemanticGenerationAlreadyRunningException exception) {
+        log.info("Mapper semantic generation rejected because a batch is already running");
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ErrorResponse(exception.code(), exception.getMessage()));
+    }
+
+    @ExceptionHandler(SemanticBatchException.class)
+    ResponseEntity<ErrorResponse> handleSemanticBatchException(SemanticBatchException exception) {
+        log.warn("Mapper semantic batch failed code={}", exception.code());
+        log.debug("Mapper semantic batch failed", exception);
+        return ResponseEntity.badRequest()
+                .body(new ErrorResponse(exception.code(), exception.getMessage()));
     }
 
     @ExceptionHandler(AiException.class)

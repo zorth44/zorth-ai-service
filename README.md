@@ -13,6 +13,7 @@ AI Platform 是一个基于 Spring Boot 和 Spring AI 构建的企业 AI 应用�
 - Date、Date Difference、Calculator 和 System Info Tool
 - Database Agent Tools：`listTables`、`getTableSchema`、`checkSql`、`executeQuery`
 - 只读 SQL 校验、查询行数/超时/结果大小限制，以及 SQL 审计日志
+- 可选的 MyBatis Mapper 语义提取 PoC（默认关闭）：扫描 Mapper XML，经共享 `ChatClient` 生成 `*.semantic.json`
 - Spring AI `ToolCallingAdvisor` 管理的多步 Tool Calling
 - Server-controlled `ToolContext`（request ID、conversationId、userId、datasourceId）
 - Tool 执行耗时、结果状态和安全异常处理
@@ -24,8 +25,11 @@ AI Platform 是一个基于 Spring Boot 和 Spring AI 构建的企业 AI 应用�
 
 以下能力属于后续阶段，当前均为 **NOT IMPLEMENTED YET**：
 
-- Semantic Metadata、searchTables、业务知识库
+- 项目级 Semantic Metadata 归并、searchTables、业务知识库
 - RAG 和 Vector Store
+- Database Agent 消费 Mapper 语义 JSON
+- 数据库 Schema / Java 源码辅助语义分析
+- 超大 Mapper 分片、异步任务和 Web UI
 - MCP
 - Chat Memory 和 Conversation 持久化
 - SSE / Streaming
@@ -39,6 +43,7 @@ ai-platform
 ├── ai-core         # Provider-neutral 聊天契约和 Spring AI ChatClient 适配
 ├── ai-agent        # Agent 契约、Spring AI Runtime、Tool、ToolContext 和执行日志
 ├── ai-datasource   # Datasource 注册、元数据、SQL 校验和只读查询执行
+├── ai-semantic     # Mapper XML → MapperSemantic JSON 的扫描、提取、校验和发布
 └── ai-server       # Spring Boot、REST、配置、异常处理和 Actuator
 ```
 
@@ -288,7 +293,15 @@ curl http://localhost:8080/actuator/health
 mvn clean test
 ```
 
-默认测试使用 Mock、Fake、H2 或脚本化 `ChatModel`，不需要真实 `AI_API_KEY`，也不会访问模型服务。测试包括离线的基础 Tool Calling 场景，以及 `listTables → getTableSchema → checkSql → executeQuery` 和 SQL 失败后修正的 Database Agent 多步场景。
+默认测试使用 Mock、Fake、H2 或脚本化 `ChatModel`，不需要真实 `AI_API_KEY`，也不会访问模型服务。测试包括离线的基础 Tool Calling 场景，以及 `listTables → getTableSchema → checkSql → executeQuery` 和 SQL 失败后修正的 Database Agent 多步场景。Mapper 语义提取的默认测试同样走 Fake/Mock，不会触发真实模型。
+
+## Mapper 语义提取 PoC
+
+可选能力，默认关闭。启用后会把配置目录中的 Mapper XML 发给当前模型 Provider，并写出 `*.semantic.json`。完整配置、curl 示例、覆盖写规则、单批次限制、数据披露和阶段边界见 [docs/mapper-semantic-generation.md](docs/mapper-semantic-generation.md)。
+
+该 HTTP 入口 **没有鉴权**，只适合本机可控环境。不要把它暴露到公网。
+
+真实模型质量评估需要至少 10 个已批准 Mapper，并且 **尚未执行**；未提供凭据或源数据时不得编造评估结果。
 
 ## 可选的真实 Provider Tool Calling 验证
 

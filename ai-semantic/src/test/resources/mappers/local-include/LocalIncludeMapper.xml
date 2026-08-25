@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.order.mapper.LocalIncludeMapper">
+    <sql id="orderColumns">
+        o.id, o.amount, o.status
+    </sql>
+    <select id="listOrders" resultType="Order">
+        SELECT
+        <include refid="orderColumns"/>
+        FROM t_order o
+    </select>
+</mapper>

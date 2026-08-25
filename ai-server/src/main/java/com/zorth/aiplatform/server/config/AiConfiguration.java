@@ -37,7 +37,8 @@ import org.springframework.web.client.RestClient;
         AiPlatformProperties.class,
         AiDatasourceProperties.class,
         DatabaseAgentProperties.class,
-        DatasourceProviderProperties.class
+        DatasourceProviderProperties.class,
+        MapperSemanticProperties.class
 })
 public class AiConfiguration {
 

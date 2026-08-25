@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.order.mapper.ChooseWhenMapper">
+    <select id="queryByStatus" resultType="Order">
+        SELECT o.id
+        FROM t_order o
+        <where>
+            <choose>
+                <when test="status != null">
+                    AND o.status = #{status}
+                </when>
+                <otherwise>
+                    AND o.status = '00'
+                </otherwise>
+            </choose>
+        </where>
+        ORDER BY o.id
+    </select>
+</mapper>

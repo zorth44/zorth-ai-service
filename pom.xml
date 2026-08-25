@@ -23,6 +23,7 @@
         <module>ai-core</module>
         <module>ai-agent</module>
         <module>ai-datasource</module>
+        <module>ai-semantic</module>
         <module>ai-server</module>
     </modules>
 

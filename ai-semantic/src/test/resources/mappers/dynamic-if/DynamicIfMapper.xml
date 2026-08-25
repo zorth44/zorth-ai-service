@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.order.mapper.DynamicIfMapper">
+    <select id="queryOrders" resultType="Order">
+        SELECT o.id, o.amount
+        FROM t_order o
+        <where>
+            <if test="startTime != null">
+                AND o.create_time <![CDATA[ >= ]]> #{startTime}
+            </if>
+            <if test="status != null">
+                AND o.status = #{status}
+            </if>
+        </where>
+    </select>
+</mapper>

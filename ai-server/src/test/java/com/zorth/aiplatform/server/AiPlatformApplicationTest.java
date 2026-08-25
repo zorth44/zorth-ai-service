@@ -2,6 +2,7 @@ package com.zorth.aiplatform.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -16,15 +17,19 @@ import com.zorth.aiplatform.agent.tool.DateTools;
 import com.zorth.aiplatform.agent.tool.SystemTools;
 import com.zorth.aiplatform.datasource.registry.DatasourceRegistry;
 import com.zorth.aiplatform.core.chat.AiChatService;
+import com.zorth.aiplatform.semantic.generation.MapperSemanticGenerator;
+import com.zorth.aiplatform.server.controller.MapperSemanticController;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 @SpringBootTest(properties = {
         "spring.ai.model.chat=none",
@@ -66,6 +71,9 @@ class AiPlatformApplicationTest {
     @Autowired
     private DatasourceRegistry datasourceRegistry;
 
+    @Autowired
+    private ApplicationContext applicationContext;
+
     @Test
     void contextLoadsAndHealthDoesNotCallModel() throws Exception {
         assertNotNull(aiChatService);
@@ -80,6 +88,16 @@ class AiPlatformApplicationTest {
         mockMvc.perform(get("/actuator/health"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("UP"));
+
+        assertTrue(applicationContext.getBeansOfType(MapperSemanticGenerator.class).isEmpty());
+        assertTrue(applicationContext.getBeansOfType(MapperSemanticController.class).isEmpty());
+        boolean semanticEndpointMapped = applicationContext
+                .getBean("requestMappingHandlerMapping", RequestMappingHandlerMapping.class)
+                .getHandlerMethods()
+                .keySet()
+                .stream()
+                .anyMatch(info -> info.getPatternValues().contains("/api/v1/semantic/mappers/generate"));
+        assertTrue(!semanticEndpointMapped);
 
         verifyNoInteractions(chatModel);
     }

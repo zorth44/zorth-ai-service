@@ -34,6 +34,10 @@ ai:
       max-complexity: 12
       include-views: false
 
+semantic:
+  mapper:
+    enabled: false
+
 management:
   endpoints:
     web:
