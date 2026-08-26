@@ -27,6 +27,8 @@ ai:
       read-timeout-seconds: 20
       max-tables-per-schema-call: 5
       max-listed-tables: 200
+      # Empty means no extra ID lock; web-sql Bearer visibility decides access.
+      # A non-empty list is a local/emergency restriction.
       allowed-datasource-ids: []
   datasources: {}
   agent:

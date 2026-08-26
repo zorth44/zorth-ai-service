@@ -31,6 +31,9 @@ public record WebSqlSettings(
     }
 
     public boolean allows(String datasourceId) {
-        return datasourceId != null && allowedDatasourceIds.contains(datasourceId);
+        if (datasourceId == null || datasourceId.isBlank()) {
+            return false;
+        }
+        return allowedDatasourceIds.isEmpty() || allowedDatasourceIds.contains(datasourceId);
     }
 }

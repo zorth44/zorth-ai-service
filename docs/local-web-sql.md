@@ -14,7 +14,7 @@ AI Platform             8081   （8080 已被 SQL 占用）
 目标库                  数据源里配置的 host（须在 SQL 的 CIDR 白名单内）
 ```
 
-不要把 `AI_API_KEY`、Bearer Token、数据源密码写进 git。白名单 ID 用启动参数或 gitignore 的 `application-local.yml`。
+不要把 `AI_API_KEY`、Bearer Token、数据源密码写进 git。可选的 `allowed-datasource-ids` 用启动参数或 gitignore 的 `application-local.yml`。
 
 ## 1. 先起 SQL 这一侧
 
@@ -60,7 +60,7 @@ curl -sS "http://127.0.0.1:8080/api/v1/data-sources" \
 
 | 值 | 来源 | 说明 |
 | --- | --- | --- |
-| `datasourceId` | 数据源 `id` | 放进 AI 白名单 |
+| `datasourceId` | 数据源 `id` | Agent 请求里的 `datasourceId` |
 | `database` | `GET .../databases` | 很多数据源 `default_database` 为空，Agent 请求必须自己带 |
 | Token | 假授权 | 调 `/api/v1/ai/agent` 时原样放 `Authorization` |
 
@@ -85,11 +85,16 @@ export AI_API_KEY='your-api-key'
 java -jar ai-server/target/ai-server-0.0.1-SNAPSHOT.jar \
   --server.port=8081 \
   --ai.datasource.provider=web-sql \
-  --ai.datasource.web-sql.base-url=http://127.0.0.1:8080 \
-  --ai.datasource.web-sql.allowed-datasource-ids="${DATASOURCE_ID}"
+  --ai.datasource.web-sql.base-url=http://127.0.0.1:8080
 ```
 
-`allowed-datasource-ids` 默认是空列表，fail closed。不配这个 ID，Tool 会返回 `DATASOURCE_NOT_ALLOWED`，不会发 HTTP。
+鉴权是用户 Token：AI 透传 `Authorization`，web-sql 按产品可见性决定能不能碰这个库。看不见就是 `404 DATA_SOURCE_NOT_FOUND`，映射成 `DATASOURCE_NOT_FOUND`。
+
+`allowed-datasource-ids` 默认空列表，**不再**拦截任何 ID。只有你显式配了非空列表时，列表外的 ID 才会返回 `DATASOURCE_NOT_ALLOWED` 且不发 HTTP。本地若要锁一两个库，再加：
+
+```bash
+  --ai.datasource.web-sql.allowed-datasource-ids="${DATASOURCE_ID}"
+```
 
 ## 4. 打一枪 Agent
 
@@ -115,6 +120,20 @@ Database tool audit ... toolName=listTables toolResultStatus=SUCCESS
 
 只看模型回答不够，表名必须和上一步 SQL 接口返回的一致。
 
+编辑器 Copilot 会带当前 SQL 再要一条 SELECT。`content` 里应有 Markdown ` ```sql ` 代码块，表名来自真实 `listTables`，不要只在散文里写：
+
+```bash
+curl -sS http://127.0.0.1:8081/api/v1/ai/agent \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "{
+    \"message\": \"列出相关表并给出一条只读 SELECT。把 SQL 放在 sql 代码块里。\",
+    \"datasourceId\": \"${DATASOURCE_ID}\",
+    \"database\": \"${DATABASE}\",
+    \"conversationId\": \"local-sql-copilot-1\"
+  }"
+```
+
 仓库里的冒烟脚本（假设三个服务已起来）：
 
 ```bash
@@ -127,7 +146,7 @@ export AI_API_KEY DATASOURCE_ID DATABASE
 | 现象 | 原因 |
 | --- | --- |
 | 数据源详情 200，列出库 500 / `Communications link failure` | 目标 MySQL 没起来，或本机到该 IP 路由 `REJECT` |
-| `DATASOURCE_NOT_ALLOWED` | AI 白名单仍是空的 |
+| `DATASOURCE_NOT_ALLOWED` | 显式配了 `allowed-datasource-ids`，当前 ID 不在列表里 |
 | `MISSING_DATABASE` | 请求没带 `database` |
 | `AUTH_ERROR` | 没带 `Authorization`，或假授权重启后 Token 失效 |
 | 404 `DATA_SOURCE_NOT_FOUND` | Token 里的 `productId` 和数据源不属于同一产品 |
@@ -138,4 +157,4 @@ export AI_API_KEY DATASOURCE_ID DATABASE
 
 - 真实 `AI_API_KEY`
 - 数据源密码、密文、IV
-- 把白名单写死进 `application.yml` 提交
+- 把可选 ID 限制写死进 `application.yml` 提交

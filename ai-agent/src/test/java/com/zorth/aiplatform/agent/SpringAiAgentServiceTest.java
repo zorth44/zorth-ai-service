@@ -87,6 +87,8 @@ class SpringAiAgentServiceTest {
         assertEquals("order total is 10000", response.content());
         assertEquals("conv-1", response.conversationId());
         verify(requestSpec).system(org.mockito.ArgumentMatchers.contains("Database Tools"));
+        verify(requestSpec).system(org.mockito.ArgumentMatchers.contains("fenced code block tagged sql"));
+        verify(requestSpec).system(org.mockito.ArgumentMatchers.contains("Do not paste query result rows"));
         verify(requestSpec).tools(dateTools, calculatorTools, systemTools, databaseTools);
         verify(requestSpec).toolContext(argThat(context ->
                 "request-123".equals(context.get(ToolContextKeys.REQUEST_ID))

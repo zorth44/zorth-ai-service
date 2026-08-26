@@ -9,7 +9,7 @@ AI_BASE="${AI_BASE:-http://127.0.0.1:8081}"
 AUTH_USERNAME="${AUTH_USERNAME:-zor}"
 AUTH_PASSWORD="${AUTH_PASSWORD:-localdevpassword123}"
 
-: "${DATASOURCE_ID:?set DATASOURCE_ID to a web-sql datasource id in the AI allowlist}"
+: "${DATASOURCE_ID:?set DATASOURCE_ID to a web-sql datasource id visible to this token}"
 : "${DATABASE:?set DATABASE; many datasources have no default_database}"
 
 login_body=$(curl -sS -f "${AUTH_BASE}/ldap/login" \

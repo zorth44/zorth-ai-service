@@ -106,17 +106,33 @@ class WebSqlAdaptersTest {
     }
 
     @Test
-    void emptyAllowlistAndMissingContextNeverCallHttp() {
-        WebSqlSettings closed = new WebSqlSettings(
+    void emptyAllowlistDoesNotBlockHttp() {
+        WebSqlSettings open = new WebSqlSettings(
                 "http://web-sql.test", 5, 20, 5, 200, List.of(), false);
-        WebSqlQueryAdapter closedQueries = new WebSqlQueryAdapter(
-                client, closed, validation, new QueryLimits(200, 10, 1_048_576));
-        WebSqlMetadataAdapter closedMetadata = new WebSqlMetadataAdapter(client, closed);
+        WebSqlMetadataAdapter openMetadata = new WebSqlMetadataAdapter(client, open);
+        when(client.listTables(any(), eq("TABLE"), eq(200), isNull())).thenReturn(
+                new WebSqlCursorPage<>(List.of(
+                        new WebSqlTableItem("orders", "users", "TABLE", null)),
+                        null));
 
+        TableList tables = openMetadata.listTables(allowedCall());
+        assertEquals(List.of("users"), tables.tables());
+        verify(client).listTables(any(), eq("TABLE"), eq(200), isNull());
+    }
+
+    @Test
+    void unlistedDatasourceIsRejectedWhenAllowlistIsSet() {
         assertEquals("DATASOURCE_NOT_ALLOWED", exceptionType(
-                () -> closedQueries.execute(allowedCall(), "SELECT 1")));
+                () -> queries.execute(
+                        call("ds-2", "orders", "Bearer t", "req-1"), "SELECT 1")));
         assertEquals("DATASOURCE_NOT_ALLOWED", exceptionType(
-                () -> closedMetadata.listTables(allowedCall())));
+                () -> metadata.listTables(call("ds-2", "orders", "Bearer t", "req-1"))));
+        verify(client, never()).execute(any(), any());
+        verify(client, never()).listTables(any(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    void missingDatabaseAndAuthorizationNeverCallHttp() {
         assertEquals("MISSING_DATABASE", exceptionType(
                 () -> queries.execute(call("ds-1", null, "Bearer t", "req-1"), "SELECT 1")));
         assertEquals("AUTH_ERROR", exceptionType(
