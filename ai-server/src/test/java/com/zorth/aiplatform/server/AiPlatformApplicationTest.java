@@ -33,6 +33,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.env.Environment;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
@@ -42,6 +43,7 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
         "ai.platform.environment=context-test",
         "ai.platform.version=9.9.9-test"
 })
+@ActiveProfiles("test")
 @AutoConfigureMockMvc
 @Import(AiPlatformApplicationTest.TestModelConfiguration.class)
 class AiPlatformApplicationTest {

@@ -24,6 +24,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.env.Environment;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -37,6 +38,7 @@ import org.springframework.test.web.servlet.MockMvc;
         "ai.platform.version=0.0.1-test"
 })
 @AutoConfigureMockMvc
+@ActiveProfiles("test")
 @Import(MapperSemanticEnabledApplicationTest.TestModelConfiguration.class)
 @DirtiesContext
 class MapperSemanticEnabledApplicationTest {

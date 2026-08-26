@@ -1,7 +1,9 @@
 package com.zorth.aiplatform.server.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zorth.aiplatform.agent.AiAgentService;
 import com.zorth.aiplatform.agent.SpringAiAgentService;
+import com.zorth.aiplatform.agent.conversation.AgentConversationMemory;
 import com.zorth.aiplatform.agent.model.SystemInfo;
 import com.zorth.aiplatform.agent.support.DatabaseToolAudit;
 import com.zorth.aiplatform.agent.support.ToolExecutionSupport;
@@ -21,6 +23,11 @@ import com.zorth.aiplatform.datasource.websql.WebSqlMetadataAdapter;
 import com.zorth.aiplatform.datasource.websql.WebSqlQueryAdapter;
 import com.zorth.aiplatform.datasource.websql.WebSqlServiceClient;
 import com.zorth.aiplatform.datasource.websql.WebSqlSettings;
+import com.zorth.aiplatform.server.auth.AuthContextClient;
+import com.zorth.aiplatform.server.auth.AuthUserResolver;
+import com.zorth.aiplatform.server.conversation.AgentConversationQueryService;
+import com.zorth.aiplatform.server.conversation.JdbcAgentConversationMemory;
+import com.zorth.aiplatform.server.conversation.JdbcAgentConversationRepository;
 import java.time.Clock;
 import java.time.Duration;
 import org.springframework.ai.chat.client.ChatClient;
@@ -34,6 +41,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
@@ -42,6 +50,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 @EnableConfigurationProperties({
         AiPlatformProperties.class,
         ChatProperties.class,
+        AuthProperties.class,
         AiDatasourceProperties.class,
         DatabaseAgentProperties.class,
         DatasourceProviderProperties.class,
@@ -206,6 +215,40 @@ public class AiConfiguration {
     }
 
     @Bean
+    AuthContextClient authContextClient(
+            RestClient.Builder restClientBuilder, AuthProperties authProperties, Clock agentClock) {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(authProperties.connectTimeout());
+        factory.setReadTimeout(authProperties.readTimeout());
+        RestClient restClient = restClientBuilder.requestFactory(factory).build();
+        return new AuthContextClient(restClient, authProperties, agentClock);
+    }
+
+    @Bean
+    AuthUserResolver authUserResolver(
+            AuthContextClient authContextClient, AuthProperties authProperties, Clock agentClock) {
+        return new AuthUserResolver(authContextClient, authProperties, agentClock);
+    }
+
+    @Bean
+    JdbcAgentConversationRepository jdbcAgentConversationRepository(
+            JdbcTemplate jdbcTemplate, Clock agentClock) {
+        return new JdbcAgentConversationRepository(jdbcTemplate, agentClock);
+    }
+
+    @Bean
+    AgentConversationMemory agentConversationMemory(
+            JdbcAgentConversationRepository jdbcAgentConversationRepository) {
+        return new JdbcAgentConversationMemory(jdbcAgentConversationRepository, jsonMapper());
+    }
+
+    @Bean
+    AgentConversationQueryService agentConversationQueryService(
+            JdbcAgentConversationRepository jdbcAgentConversationRepository) {
+        return new AgentConversationQueryService(jdbcAgentConversationRepository, jsonMapper());
+    }
+
+    @Bean
     AiAgentService aiAgentService(
             ChatClient chatClient,
             ToolCallingAdvisor toolCallingAdvisor,
@@ -213,7 +256,9 @@ public class AiConfiguration {
             CalculatorTools calculatorTools,
             SystemTools systemTools,
             DatabaseTools databaseTools,
-            ToolExecutionSupport executionSupport) {
+            ToolExecutionSupport executionSupport,
+            AgentConversationMemory agentConversationMemory,
+            ChatProperties chatProperties) {
         return new SpringAiAgentService(
                 chatClient,
                 toolCallingAdvisor,
@@ -223,7 +268,13 @@ public class AiConfiguration {
                 calculatorTools,
                 systemTools,
                 databaseTools,
-                executionSupport);
+                executionSupport,
+                agentConversationMemory,
+                chatProperties.memoryMaxMessages());
+    }
+
+    private static ObjectMapper jsonMapper() {
+        return new ObjectMapper().findAndRegisterModules();
     }
 
     private static WebSqlSettings webSqlSettings(

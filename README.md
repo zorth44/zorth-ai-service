@@ -9,9 +9,10 @@ AI Platform 是一个基于 Spring Boot 和 Spring AI 构建的企业 AI 应用�
 - Provider-neutral `AiChatService`
 - 同步聊天接口 `POST /api/v1/ai/chat`
 - SSE 流式聊天接口 `POST /api/v1/ai/chat/stream`
-- 基于 Spring AI `ChatMemory` 的进程内多轮对话（可选 `conversationId`）
+- 基于 Spring AI `ChatMemory` 的进程内多轮对话（`/api/v1/ai/chat`，可选 `conversationId`）
 - Provider-neutral `AiAgentService`
 - Tool Calling 接口 `POST /api/v1/ai/agent`
+- 按用户隔离的 Agent 会话持久化（MySQL `aiplatform`）：列表、详情、删除，以及带 `conversationId` 的多轮记忆
 - Date、Date Difference、Calculator 和 System Info Tool
 - Database Agent Tools：`listTables`、`getTableSchema`、`checkSql`、`executeQuery`
 - 只读 SQL 校验、查询行数/超时/结果大小限制，以及 SQL 审计日志
@@ -33,7 +34,7 @@ AI Platform 是一个基于 Spring Boot 和 Spring AI 构建的企业 AI 应用�
 - 数据库 Schema / Java 源码辅助语义分析
 - 超大 Mapper 分片、异步任务和 Web UI
 - MCP
-- Conversation 持久化（跨进程、跨实例、会话列表）
+- Chat 会话持久化（`/api/v1/ai/chat` 仍是进程内 Memory）
 - 多模型动态路由
 - 用户权限和持久化 Audit
 
@@ -97,9 +98,14 @@ Client
 | `AI_MODEL` | 否 | Chat Model 名称 | `deepseek-v4-flash` |
 | `AI_BASE_URL` | 否 | OpenAI-Compatible API 地址 | `https://api.deepseek.com` |
 | `AI_CHAT_TIMEOUT` | 否 | 单次模型调用超时，同时作为聊天 SSE 超时 | `300s` |
-| `AI_CHAT_MEMORY_MAX_MESSAGES` | 否 | 每个 `conversationId` 保留的最近消息数 | `20` |
+| `AI_CHAT_MEMORY_MAX_MESSAGES` | 否 | Chat 与 Agent 各自保留的最近消息数 | `20` |
 | `AI_PLATFORM_ENVIRONMENT` | 否 | System Info Tool 返回的运行环境 | `local` |
 | `AI_PLATFORM_VERSION` | 否 | System Info Tool 返回的应用版本 | `0.0.1-SNAPSHOT` |
+| `AI_METADATA_URL` | 否 | Agent 会话元数据库 JDBC URL | `jdbc:mysql://127.0.0.1:3306/aiplatform?serverTimezone=UTC` |
+| `AI_METADATA_USERNAME` | 否 | 元数据库用户 | `aiplatform_user` |
+| `AI_METADATA_PASSWORD` | 否 | 元数据库密码 | `aiplatform_password` |
+| `AI_AUTH_CONTEXT_URL` | 否 | 与 SQL 编辑器相同的 auth-context 地址 | `http://127.0.0.1:8090/internal/api/v1/auth/context` |
+| `AI_AUTH_INTERNAL_SERVICE_KEY` | 否 | 调用 auth-context 的内部密钥 | `local-sql-editor-key` |
 
 示例中的值均为占位符，请勿将真实 API Key、Token 或密码提交到 Git。
 
@@ -135,7 +141,7 @@ java -jar ai-server/target/ai-server-0.0.1-SNAPSHOT.jar
 
 同步和流式接口共用同一套 `ChatRequest`：`message` 必填，`conversationId` 可选。未传 `conversationId` 时服务会生成一个新 ID 并在响应中返回；客户端下次带上同一个 ID 即可续聊。历史消息存在进程内的 Spring AI `ChatMemory`（`InMemoryChatMemoryRepository` + 窗口裁剪），重启或换实例会丢失。后续持久化只需替换 `ChatMemoryRepository`，不必改多轮协议。
 
-`POST /api/v1/ai/chat` 保持 `{ "message": "..." }` 可用；响应会多一个 `conversationId` 字段，旧客户端如果只读 `content` 仍然有效。Chat 不会调用 Tool。`POST /api/v1/ai/agent` 上的 `conversationId` 仍只用于 ToolContext 审计，不会读写这段 Chat Memory。
+`POST /api/v1/ai/chat` 保持 `{ "message": "..." }` 可用；响应会多一个 `conversationId` 字段，旧客户端如果只读 `content` 仍然有效。Chat 不会调用 Tool。Chat 的 `conversationId` 与 Agent 会话相互隔离，即使两边用同一个原始 id 也不会共享窗口。
 
 请求：
 
@@ -235,7 +241,11 @@ curl \
 }
 ```
 
-流式接口 `POST /api/v1/ai/agent/stream` 与 `/chat/stream` 一样返回 SSE：`start`、若干 `delta`、`completed`。Tool 执行时额外发 `tool` 事件（只有 `toolName` 和 `status`，不含参数和结果）。同步 `POST /api/v1/ai/agent` 仍然可用。
+流式接口 `POST /api/v1/ai/agent/stream` 与 `/chat/stream` 一样返回 SSE：`start`、若干 `delta`、`completed`。Tool 执行时额外发 `tool` 事件（只有 `toolName` 和 `status`，不含参数和结果）。同步 `POST /api/v1/ai/agent` 仍然可用。未传 `conversationId` 时服务会生成一个新 ID，并在 JSON 响应以及流式 `start` / `completed` 中返回。
+
+可选字段 `userText`（最长 10,000 字符，空白视为未传）是用户可见的这一轮话。Copilot 应把编辑器里的句子放在 `userText`，把当前 SQL 等仅本轮需要的上下文放在 `message`。有 `userText` 时，历史只保存 `userText`，不会把 `message` 里的编辑器上下文累进记忆窗口。不传 `userText` 的客户端仍然有效，历史保存 `message`。
+
+带 `Authorization` 且 auth-context 能解析出用户时，成功完成的一轮会写入该用户的会话；请求体里的 `userId` **不能**决定归属，也不会写入 `ToolContext`。没有 Token 的 `{ "message": "..." }` 仍然可用，不会 401，也不会写库或加载历史。
 
 ```bash
 curl \
@@ -244,8 +254,10 @@ curl \
   http://localhost:8080/api/v1/ai/agent/stream \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "message": "列出订单",
+    "userText": "列出订单",
     "conversationId": "tab-1",
     "datasourceId": "demo",
     "database": "orders"
@@ -289,7 +301,7 @@ data:{"type":"completed","conversationId":"tab-1"}
 | `checkSql` | 校验 SQL 是否为单条只读 SELECT | `valid`, `errorType`, `message` |
 | `executeQuery` | 执行已校验的只读查询，并限制行数与结果大小 | `columns`, `rows`, `rowCount`, `truncated` |
 
-`datasourceId`、`conversationId`、`userId` 由服务端写入 `ToolContext`，不会出现在 Tool JSON Schema 中，模型不能伪造数据源。`executeQuery` 会再次做安全校验，不依赖模型一定先调用 `checkSql`。
+`datasourceId`、`conversationId` 由服务端写入 `ToolContext`。`userId` 在 Token 可解析时来自 auth-context，**不是**请求体里的 `userId`。这些字段不会出现在 Tool JSON Schema 中，模型不能伪造数据源。`executeQuery` 会再次做安全校验，不依赖模型一定先调用 `checkSql`。
 
 可选请求示例：
 
@@ -306,7 +318,20 @@ curl \
   }'
 ```
 
-仅发送 `{ "message": "..." }` 的旧 Agent 客户端仍然有效，此时不会注册 Database Tools。`POST /api/v1/ai/chat` 不会调用数据库 Tool；chat 的 `conversationId` 只用于 Chat Memory，和 Agent ToolContext 里的 `conversationId` 相互独立。
+仅发送 `{ "message": "..." }` 的旧 Agent 客户端仍然有效，此时不会注册 Database Tools，也不会持久化会话。`POST /api/v1/ai/chat` 不会调用数据库 Tool；chat 的 `conversationId` 只用于 Chat Memory，和 Agent 会话相互独立。
+
+当前用户的会话 API 需要 `Authorization`。列表最多 50 条，按 `updatedAt` 倒序。读或删别人的会话（以及不存在的 id）一律 404 `CONVERSATION_NOT_FOUND`。没有 Token 返回 401 `UNAUTHENTICATED`；auth-context 不可用返回 503 `AUTH_SERVICE_UNAVAILABLE`。
+
+```bash
+curl http://localhost:8080/api/v1/ai/agent/conversations \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/ai/agent/conversations/{id} \
+  -H "Authorization: Bearer $TOKEN"
+
+curl -X DELETE http://localhost:8080/api/v1/ai/agent/conversations/{id} \
+  -H "Authorization: Bearer $TOKEN"
+```
 
 是否调用 Tool、调用哪个 Tool、以及是否继续调用其他 Tool，由 LLM 根据用户请求、Tool Description 和 Tool Schema 决定。普通知识问题允许直接回答，不会强制调用 Tool。
 

@@ -71,8 +71,9 @@ class SpringAiAgentServiceTest {
         verify(requestSpec).user("question");
         verify(requestSpec).tools(dateTools, calculatorTools, systemTools);
         verify(requestSpec).toolContext(argThat(context ->
-                context.size() == 1
-                        && "request-123".equals(context.get(ToolContextKeys.REQUEST_ID))));
+                "request-123".equals(context.get(ToolContextKeys.REQUEST_ID))
+                        && context.containsKey(ToolContextKeys.CONVERSATION_ID)
+                        && context.size() == 2));
         verify(requestSpec).advisors(same(toolCallingAdvisor));
     }
 
@@ -103,7 +104,7 @@ class SpringAiAgentServiceTest {
         verify(requestSpec).toolContext(argThat(context ->
                 "request-123".equals(context.get(ToolContextKeys.REQUEST_ID))
                         && "conv-1".equals(context.get(ToolContextKeys.CONVERSATION_ID))
-                        && "user-9".equals(context.get(ToolContextKeys.USER_ID))
+                        && !context.containsKey(ToolContextKeys.USER_ID)
                         && "demo".equals(context.get(ToolContextKeys.DATASOURCE_ID))
                         && "orders".equals(context.get(ToolContextKeys.DATABASE))
                         && !context.containsKey(ToolContextKeys.AUTHORIZATION)));
@@ -126,12 +127,14 @@ class SpringAiAgentServiceTest {
                 () -> "request-123");
 
         service.execute(
-                new AgentRequest("查询订单", "conv-1", "demo", "user-9", "orders"),
-                new AgentRuntimeContext("Bearer secret-token"));
+                new AgentRequest("查询订单", "conv-1", "demo", "spoof", "orders"),
+                new AgentRuntimeContext("Bearer secret-token", "1001"));
 
         verify(requestSpec).system(org.mockito.ArgumentMatchers.contains("Numeric values"));
         verify(requestSpec).toolContext(argThat(context ->
-                "Bearer secret-token".equals(context.get(ToolContextKeys.AUTHORIZATION))));
+                "Bearer secret-token".equals(context.get(ToolContextKeys.AUTHORIZATION))
+                        && "1001".equals(context.get(ToolContextKeys.USER_ID))
+                        && !"spoof".equals(context.get(ToolContextKeys.USER_ID))));
     }
 
     @Test
@@ -234,9 +237,8 @@ class SpringAiAgentServiceTest {
                 .collectList()
                 .block(Duration.ofSeconds(2));
 
-        assertEquals(List.of(
-                AgentStreamEvent.start(null),
-                AgentStreamEvent.error()), events);
+        assertEquals(AgentStreamEvent.TYPE_START, events.get(0).type());
+        assertEquals(AgentStreamEvent.error(), events.get(1));
         assertTrue(events.stream().noneMatch(event ->
                 event.message() != null && event.message().contains("secret provider detail")));
     }

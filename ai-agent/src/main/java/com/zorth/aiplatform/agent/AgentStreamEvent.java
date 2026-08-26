@@ -39,13 +39,10 @@ public record AgentStreamEvent(
     }
 
     public static AgentStreamEvent error() {
-        return new AgentStreamEvent(
-                TYPE_ERROR,
-                null,
-                null,
-                null,
-                null,
-                "AI_SERVICE_ERROR",
-                "The AI service is temporarily unavailable");
+        return error("AI_SERVICE_ERROR", "The AI service is temporarily unavailable");
+    }
+
+    public static AgentStreamEvent error(String code, String message) {
+        return new AgentStreamEvent(TYPE_ERROR, null, null, null, null, code, message);
     }
 }

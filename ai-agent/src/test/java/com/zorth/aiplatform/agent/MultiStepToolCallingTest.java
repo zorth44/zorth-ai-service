@@ -89,7 +89,8 @@ class MultiStepToolCallingTest {
         assertTrue(events.contains(AgentStreamEvent.tool("getCurrentDate", AgentStreamEvent.STATUS_SUCCESS)));
         assertTrue(events.contains(AgentStreamEvent.tool("calculateDaysBetween", AgentStreamEvent.STATUS_STARTED)));
         assertTrue(events.contains(AgentStreamEvent.delta("There are 133 days until 2027-01-01.")));
-        assertEquals(AgentStreamEvent.completed(null), events.get(events.size() - 1));
+        assertEquals(AgentStreamEvent.TYPE_COMPLETED, events.get(events.size() - 1).type());
+        assertTrue(events.get(events.size() - 1).conversationId() != null);
     }
 
     private static final class ScriptedMultiStepChatModel implements ChatModel {

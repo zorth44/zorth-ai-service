@@ -17,8 +17,12 @@ import com.zorth.aiplatform.agent.AgentResponse;
 import com.zorth.aiplatform.agent.AgentRuntimeContext;
 import com.zorth.aiplatform.agent.AgentStreamEvent;
 import com.zorth.aiplatform.agent.AiAgentService;
+import com.zorth.aiplatform.core.exception.AiClientException;
 import com.zorth.aiplatform.core.exception.AiException;
+import com.zorth.aiplatform.server.auth.AuthUserResolver;
+import java.util.Optional;
 import org.hamcrest.Matchers;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -36,6 +40,15 @@ class AiAgentControllerTest {
 
     @MockitoBean
     private AiAgentService aiAgentService;
+
+    @MockitoBean
+    private AuthUserResolver authUserResolver;
+
+    @BeforeEach
+    void setUpAuth() {
+        when(authUserResolver.resolveOptional(any())).thenReturn(Optional.empty());
+        when(authUserResolver.resolveOptional("Bearer secret-token")).thenReturn(Optional.of("1001"));
+    }
 
     @Test
     void returnsUnwrappedAgentResponse() throws Exception {
@@ -78,7 +91,8 @@ class AiAgentControllerTest {
                                 && "orders".equals(request.database())
                                 && "user-9".equals(request.userId())),
                 argThat((AgentRuntimeContext runtime) ->
-                        "Bearer secret-token".equals(runtime.authorization())));
+                        "Bearer secret-token".equals(runtime.authorization())
+                                && "1001".equals(runtime.userId())));
     }
 
     @Test
@@ -93,7 +107,48 @@ class AiAgentControllerTest {
         verify(aiAgentService).execute(
                 argThat((AgentRequest request) ->
                         request.datasourceId() == null && "今天是几号？".equals(request.message())),
-                argThat((AgentRuntimeContext runtime) -> runtime.authorization() == null));
+                argThat((AgentRuntimeContext runtime) ->
+                        runtime.authorization() == null && runtime.userId() == null));
+    }
+
+    @Test
+    void spoofedBodyUserIdDoesNotBecomeRuntimeUserId() throws Exception {
+        when(aiAgentService.execute(any(), any())).thenReturn(new AgentResponse("ok", "conv-1"));
+
+        mockMvc.perform(post("/api/v1/ai/agent")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer secret-token")
+                        .content("""
+                                {
+                                  "message": "列出订单",
+                                  "userId": "spoof",
+                                  "userText": "列出订单"
+                                }
+                                """))
+                .andExpect(status().isOk());
+
+        verify(aiAgentService).execute(
+                argThat((AgentRequest request) ->
+                        "spoof".equals(request.userId()) && "列出订单".equals(request.userText())),
+                argThat((AgentRuntimeContext runtime) -> "1001".equals(runtime.userId())));
+    }
+
+    @Test
+    void rejectsOversizedUserTextWithoutCallingService() throws Exception {
+        assertInvalidRequest("{\"message\":\"ok\",\"userText\":\"" + "a".repeat(10_001) + "\"}");
+    }
+
+    @Test
+    void conversationNotFoundReturns404() throws Exception {
+        when(aiAgentService.execute(any(), any()))
+                .thenThrow(AiClientException.conversationNotFound());
+
+        mockMvc.perform(post("/api/v1/ai/agent")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer secret-token")
+                        .content("{\"message\":\"列出订单\",\"conversationId\":\"other-user\"}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("CONVERSATION_NOT_FOUND"));
     }
 
     @Test
@@ -151,7 +206,8 @@ class AiAgentControllerTest {
                                 && "demo".equals(request.datasourceId())
                                 && "orders".equals(request.database())),
                 argThat((AgentRuntimeContext runtime) ->
-                        "Bearer secret-token".equals(runtime.authorization())));
+                        "Bearer secret-token".equals(runtime.authorization())
+                                && "1001".equals(runtime.userId())));
     }
 
     @Test

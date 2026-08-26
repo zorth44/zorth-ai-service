@@ -1,5 +1,6 @@
 package com.zorth.aiplatform.server.exception;
 
+import com.zorth.aiplatform.core.exception.AiClientException;
 import com.zorth.aiplatform.core.exception.AiException;
 import com.zorth.aiplatform.semantic.exception.SemanticBatchException;
 import com.zorth.aiplatform.semantic.exception.SemanticGenerationAlreadyRunningException;
@@ -42,6 +43,13 @@ public class GlobalExceptionHandler {
         log.warn("Mapper semantic batch failed code={}", exception.code());
         log.debug("Mapper semantic batch failed", exception);
         return ResponseEntity.badRequest()
+                .body(new ErrorResponse(exception.code(), exception.getMessage()));
+    }
+
+    @ExceptionHandler(AiClientException.class)
+    ResponseEntity<ErrorResponse> handleAiClientException(AiClientException exception) {
+        log.debug("AI client error code={} status={}", exception.code(), exception.status());
+        return ResponseEntity.status(exception.status())
                 .body(new ErrorResponse(exception.code(), exception.getMessage()));
     }
 

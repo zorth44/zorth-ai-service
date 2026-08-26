@@ -1,0 +1,13 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:aiplatform;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  flyway:
+    enabled: true
+ai:
+  auth:
+    context-url: http://127.0.0.1:9/internal/api/v1/auth/context
+    internal-service-key: test-internal-key
+    cache-ttl: 0s

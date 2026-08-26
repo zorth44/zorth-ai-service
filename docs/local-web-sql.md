@@ -10,7 +10,8 @@ SQL 编辑器自己的启动步骤见 sibling 仓库 `zorth-web-sql-editor/docs/
 假授权 auth-service     8090
 SQL service             8080
 AI Platform             8081   （8080 已被 SQL 占用）
-元数据库 MySQL          127.0.0.1:3306 / sqleditor
+SQL 元数据库 MySQL      127.0.0.1:3306 / sqleditor
+AI 元数据库 MySQL       127.0.0.1:3306 / aiplatform
 目标库                  数据源里配置的 host（须在 SQL 的 CIDR 白名单内）
 ```
 
@@ -75,7 +76,7 @@ curl -sS "http://127.0.0.1:8080/api/v1/data-sources/${DATASOURCE_ID}/tables?data
 
 ## 3. 起 AI
 
-不要在仓库根目录跑 `spring-boot:run`，父 POM 没有 main class。先安装模块，再用 fat jar，并换端口：
+不要在仓库根目录跑 `spring-boot:run`，父 POM 没有 main class。先安装模块，再用 fat jar，并换端口。本机需要先有空库 `aiplatform`（不要和 SQL 的 `sqleditor` 混用）。auth-context 的 URL 和内部密钥与 SQL service 本地值一致：
 
 ```bash
 cd /path/to/zorth-ai-service
@@ -85,10 +86,14 @@ export AI_API_KEY='your-api-key'
 java -jar ai-server/target/ai-server-0.0.1-SNAPSHOT.jar \
   --server.port=8081 \
   --ai.datasource.provider=web-sql \
-  --ai.datasource.web-sql.base-url=http://127.0.0.1:8080
+  --ai.datasource.web-sql.base-url=http://127.0.0.1:8080 \
+  --ai.auth.context-url=http://127.0.0.1:8090/internal/api/v1/auth/context \
+  --ai.auth.internal-service-key=local-sql-editor-key
 ```
 
-鉴权是用户 Token：AI 透传 `Authorization`，web-sql 按产品可见性决定能不能碰这个库。看不见就是 `404 DATA_SOURCE_NOT_FOUND`，映射成 `DATASOURCE_NOT_FOUND`。
+默认会连 `jdbc:mysql://127.0.0.1:3306/aiplatform`（`AI_METADATA_URL` / `AI_METADATA_USERNAME` / `AI_METADATA_PASSWORD`）。Flyway 会建 `agent_conversation` 和 `agent_message`。
+
+鉴权是用户 Token：AI 把 `Authorization` 交给 auth-context 解析 `userId`，再透传给 web-sql。请求体里的 `userId` 不会被当成登录身份。看不见数据源就是 `404 DATA_SOURCE_NOT_FOUND`，映射成 `DATASOURCE_NOT_FOUND`。没有 Token 的纯 `{ "message": "..." }` Agent 仍然可用，但不会写会话历史。
 
 `allowed-datasource-ids` 默认空列表，**不再**拦截任何 ID。只有你显式配了非空列表时，列表外的 ID 才会返回 `DATASOURCE_NOT_ALLOWED` 且不发 HTTP。本地若要锁一两个库，再加：
 
@@ -104,6 +109,7 @@ curl -sS http://127.0.0.1:8081/api/v1/ai/agent \
   -H "Authorization: Bearer $TOKEN" \
   -d "{
     \"message\": \"这个数据库里有哪些表？只需要列出表名。\",
+    \"userText\": \"这个数据库里有哪些表？只需要列出表名。\",
     \"datasourceId\": \"${DATASOURCE_ID}\",
     \"database\": \"${DATABASE}\",
     \"conversationId\": \"local-sql-connect-1\"
@@ -118,7 +124,12 @@ Tool execution started ... toolName=listTables
 Database tool audit ... toolName=listTables toolResultStatus=SUCCESS
 ```
 
-只看模型回答不够，表名必须和上一步 SQL 接口返回的一致。
+只看模型回答不够，表名必须和上一步 SQL 接口返回的一致。带 Token 后续可列出当前用户会话：
+
+```bash
+curl -sS http://127.0.0.1:8081/api/v1/ai/agent/conversations \
+  -H "Authorization: Bearer $TOKEN"
+```
 
 编辑器 Copilot 会带当前 SQL 再要一条 SELECT。`content` 里应有 Markdown ` ```sql ` 代码块，表名来自真实 `listTables`，不要只在散文里写：
 
@@ -149,6 +160,7 @@ export AI_API_KEY DATASOURCE_ID DATABASE
 | `DATASOURCE_NOT_ALLOWED` | 显式配了 `allowed-datasource-ids`，当前 ID 不在列表里 |
 | `MISSING_DATABASE` | 请求没带 `database` |
 | `AUTH_ERROR` | 没带 `Authorization`，或假授权重启后 Token 失效 |
+| `UNAUTHENTICATED` / `AUTH_SERVICE_UNAVAILABLE` | 会话 list/get/delete 没带 Token，或 auth-context 没起来 |
 | 404 `DATA_SOURCE_NOT_FOUND` | Token 里的 `productId` 和数据源不属于同一产品 |
 | 父工程 `Unable to find a suitable main class` | 在仓库根目录跑了 `spring-boot:run` |
 | AI 起不来或占错端口 | 和 SQL service 都默认 8080 |

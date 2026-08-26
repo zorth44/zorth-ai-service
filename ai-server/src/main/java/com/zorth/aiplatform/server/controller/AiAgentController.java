@@ -5,6 +5,7 @@ import com.zorth.aiplatform.agent.AgentResponse;
 import com.zorth.aiplatform.agent.AgentRuntimeContext;
 import com.zorth.aiplatform.agent.AgentStreamEvent;
 import com.zorth.aiplatform.agent.AiAgentService;
+import com.zorth.aiplatform.server.auth.AuthUserResolver;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
@@ -22,9 +23,11 @@ import reactor.core.publisher.Flux;
 public class AiAgentController {
 
     private final AiAgentService aiAgentService;
+    private final AuthUserResolver authUserResolver;
 
-    public AiAgentController(AiAgentService aiAgentService) {
+    public AiAgentController(AiAgentService aiAgentService, AuthUserResolver authUserResolver) {
         this.aiAgentService = aiAgentService;
+        this.authUserResolver = authUserResolver;
     }
 
     @PostMapping(
@@ -61,8 +64,10 @@ public class AiAgentController {
                         .build()));
     }
 
-    private static AgentRuntimeContext runtime(String authorization) {
-        return new AgentRuntimeContext(blankToNull(authorization));
+    private AgentRuntimeContext runtime(String authorization) {
+        return new AgentRuntimeContext(
+                blankToNull(authorization),
+                authUserResolver.resolveOptional(authorization).orElse(null));
     }
 
     private static String blankToNull(String value) {
