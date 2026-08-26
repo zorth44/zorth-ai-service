@@ -25,16 +25,23 @@ import java.time.Clock;
 import java.time.Duration;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.ChatMemoryRepository;
+import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties({
         AiPlatformProperties.class,
+        ChatProperties.class,
         AiDatasourceProperties.class,
         DatabaseAgentProperties.class,
         DatasourceProviderProperties.class,
@@ -48,8 +55,31 @@ public class AiConfiguration {
     }
 
     @Bean
-    AiChatService aiChatService(ChatClient chatClient) {
-        return new SpringAiChatService(chatClient);
+    ChatMemoryRepository chatMemoryRepository() {
+        return new InMemoryChatMemoryRepository();
+    }
+
+    @Bean
+    ChatMemory chatMemory(ChatMemoryRepository chatMemoryRepository, ChatProperties chatProperties) {
+        return MessageWindowChatMemory.builder()
+                .chatMemoryRepository(chatMemoryRepository)
+                .maxMessages(chatProperties.memoryMaxMessages())
+                .build();
+    }
+
+    @Bean
+    AiChatService aiChatService(ChatClient chatClient, ChatMemory chatMemory) {
+        return new SpringAiChatService(chatClient, chatMemory);
+    }
+
+    @Bean
+    WebMvcConfigurer chatStreamTimeoutConfigurer(ChatProperties chatProperties) {
+        return new WebMvcConfigurer() {
+            @Override
+            public void configureAsyncSupport(AsyncSupportConfigurer configurer) {
+                configurer.setDefaultTimeout(chatProperties.streamTimeout().toMillis());
+            }
+        };
     }
 
     @Bean

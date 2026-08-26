@@ -8,6 +8,8 @@ AI Platform 是一个基于 Spring Boot 和 Spring AI 构建的企业 AI 应用�
 - OpenAI-Compatible Chat Model 接入
 - Provider-neutral `AiChatService`
 - 同步聊天接口 `POST /api/v1/ai/chat`
+- SSE 流式聊天接口 `POST /api/v1/ai/chat/stream`
+- 基于 Spring AI `ChatMemory` 的进程内多轮对话（可选 `conversationId`）
 - Provider-neutral `AiAgentService`
 - Tool Calling 接口 `POST /api/v1/ai/agent`
 - Date、Date Difference、Calculator 和 System Info Tool
@@ -31,8 +33,7 @@ AI Platform 是一个基于 Spring Boot 和 Spring AI 构建的企业 AI 应用�
 - 数据库 Schema / Java 源码辅助语义分析
 - 超大 Mapper 分片、异步任务和 Web UI
 - MCP
-- Chat Memory 和 Conversation 持久化
-- SSE / Streaming
+- Conversation 持久化（跨进程、跨实例、会话列表）
 - 多模型动态路由
 - 用户权限和持久化 Audit
 
@@ -54,7 +55,8 @@ Client
   → AiChatController
   → AiChatService
   → SpringAiChatService
-  → ChatClient
+  → ChatClient + MessageChatMemoryAdvisor
+  → ChatMemory (InMemoryChatMemoryRepository)
   → ChatModel
   → OpenAI-Compatible API
 ```
@@ -94,6 +96,8 @@ Client
 | `AI_API_KEY` | 是 | Provider API Key | 无 |
 | `AI_MODEL` | 否 | Chat Model 名称 | `deepseek-v4-flash` |
 | `AI_BASE_URL` | 否 | OpenAI-Compatible API 地址 | `https://api.deepseek.com` |
+| `AI_CHAT_TIMEOUT` | 否 | 单次模型调用超时，同时作为聊天 SSE 超时 | `300s` |
+| `AI_CHAT_MEMORY_MAX_MESSAGES` | 否 | 每个 `conversationId` 保留的最近消息数 | `20` |
 | `AI_PLATFORM_ENVIRONMENT` | 否 | System Info Tool 返回的运行环境 | `local` |
 | `AI_PLATFORM_VERSION` | 否 | System Info Tool 返回的应用版本 | `0.0.1-SNAPSHOT` |
 
@@ -129,6 +133,10 @@ java -jar ai-server/target/ai-server-0.0.1-SNAPSHOT.jar
 
 ## 聊天接口
 
+同步和流式接口共用同一套 `ChatRequest`：`message` 必填，`conversationId` 可选。未传 `conversationId` 时服务会生成一个新 ID 并在响应中返回；客户端下次带上同一个 ID 即可续聊。历史消息存在进程内的 Spring AI `ChatMemory`（`InMemoryChatMemoryRepository` + 窗口裁剪），重启或换实例会丢失。后续持久化只需替换 `ChatMemoryRepository`，不必改多轮协议。
+
+`POST /api/v1/ai/chat` 保持 `{ "message": "..." }` 可用；响应会多一个 `conversationId` 字段，旧客户端如果只读 `content` 仍然有效。Chat 不会调用 Tool。`POST /api/v1/ai/agent` 上的 `conversationId` 仍只用于 ToolContext 审计，不会读写这段 Chat Memory。
+
 请求：
 
 ```bash
@@ -145,11 +153,56 @@ curl \
 
 ```json
 {
-  "content": "数据库索引是……"
+  "content": "数据库索引是……",
+  "conversationId": "3f1c0a2e-4b9d-4c1a-9e2f-8a6b7c5d4e3f"
 }
 ```
 
-`message` 不能为空、不能只包含空白字符，最大长度为 10,000 个字符。无效请求返回 HTTP 400：
+续聊时带上返回的 ID：
+
+```bash
+curl \
+  -X POST \
+  http://localhost:8080/api/v1/ai/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conversationId": "3f1c0a2e-4b9d-4c1a-9e2f-8a6b7c5d4e3f",
+    "message": "给我一个例子"
+  }'
+```
+
+流式接口 `POST /api/v1/ai/chat/stream` 返回 SSE。先发 `start`（带 `conversationId`），再发若干 `delta`，最后发 `completed`。模型失败时发 `error`，不会把 Provider 细节返回给客户端。
+
+```bash
+curl \
+  -N \
+  -X POST \
+  http://localhost:8080/api/v1/ai/chat/stream \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{
+    "conversationId": "3f1c0a2e-4b9d-4c1a-9e2f-8a6b7c5d4e3f",
+    "message": "什么是数据库索引？"
+  }'
+```
+
+```text
+event:start
+data:{"type":"start","conversationId":"3f1c0a2e-4b9d-4c1a-9e2f-8a6b7c5d4e3f"}
+
+event:delta
+data:{"type":"delta","content":"数据库"}
+
+event:delta
+data:{"type":"delta","content":"索引是……"}
+
+event:completed
+data:{"type":"completed","conversationId":"3f1c0a2e-4b9d-4c1a-9e2f-8a6b7c5d4e3f"}
+```
+
+流式完成后会把完整助手回复写入同一份 Chat Memory，因此同步和流式可以交叉续聊。
+
+`message` 不能为空、不能只包含空白字符，最大长度为 10,000 个字符。`conversationId` 最长 128 个字符。无效请求返回 HTTP 400：
 
 ```json
 {
@@ -219,7 +272,7 @@ curl \
   }'
 ```
 
-仅发送 `{ "message": "..." }` 的旧客户端仍然有效，此时不会注册 Database Tools。`POST /api/v1/ai/chat` 保持 `{ "message": "..." }` → `{ "content": "..." }`，不会调用数据库 Tool。
+仅发送 `{ "message": "..." }` 的旧 Agent 客户端仍然有效，此时不会注册 Database Tools。`POST /api/v1/ai/chat` 不会调用数据库 Tool；chat 的 `conversationId` 只用于 Chat Memory，和 Agent ToolContext 里的 `conversationId` 相互独立。
 
 是否调用 Tool、调用哪个 Tool、以及是否继续调用其他 Tool，由 LLM 根据用户请求、Tool Description 和 Tool Schema 决定。普通知识问题允许直接回答，不会强制调用 Tool。
 
