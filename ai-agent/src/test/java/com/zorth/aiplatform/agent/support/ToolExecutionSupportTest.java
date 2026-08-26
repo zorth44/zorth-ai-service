@@ -91,6 +91,28 @@ class ToolExecutionSupportTest {
         }
     }
 
+    @Test
+    void notifiesListenerWithoutArgumentsOrResults() throws Exception {
+        List<String> events = new java.util.ArrayList<>();
+        ToolContext context = new ToolContext(Map.of(ToolContextKeys.REQUEST_ID, "request-123"));
+        try (AutoCloseable ignored = executionSupport.listen(
+                "request-123",
+                (toolName, status) -> events.add(toolName + ":" + status))) {
+            SensitiveValue value = new SensitiveValue();
+            assertSame(value, executionSupport.execute("safeTool", context, () -> value));
+            assertThrows(ToolExecutionException.class,
+                    () -> executionSupport.execute(
+                            "failedTool", context,
+                            () -> { throw new IllegalStateException("sensitive-argument-value"); }));
+        }
+
+        assertEquals(List.of(
+                "safeTool:STARTED",
+                "safeTool:SUCCESS",
+                "failedTool:STARTED",
+                "failedTool:FAILURE"), events);
+    }
+
     private static final class SensitiveValue {
         @Override
         public String toString() {

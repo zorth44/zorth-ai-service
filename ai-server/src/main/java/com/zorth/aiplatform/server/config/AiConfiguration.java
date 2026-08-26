@@ -212,7 +212,8 @@ public class AiConfiguration {
             DateTools dateTools,
             CalculatorTools calculatorTools,
             SystemTools systemTools,
-            DatabaseTools databaseTools) {
+            DatabaseTools databaseTools,
+            ToolExecutionSupport executionSupport) {
         return new SpringAiAgentService(
                 chatClient,
                 toolCallingAdvisor,
@@ -221,7 +222,8 @@ public class AiConfiguration {
                 dateTools,
                 calculatorTools,
                 systemTools,
-                databaseTools);
+                databaseTools,
+                executionSupport);
     }
 
     private static WebSqlSettings webSqlSettings(

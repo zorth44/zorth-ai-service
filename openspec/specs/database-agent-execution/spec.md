@@ -64,6 +64,21 @@ The system SHALL rely on Spring AI tool calling for successive tool calls in one
 - **WHEN** a client posts `{ "message": "你好" }` to `/api/v1/ai/chat`
 - **THEN** the endpoint behaves as before and does not invoke database tools
 
+### Requirement: Streaming agent endpoint
+The system SHALL expose `POST /api/v1/ai/agent/stream`, consume `application/json`, and produce `text/event-stream`. The stream SHALL emit a `start` event, zero or more `delta` events with `content`, zero or more `tool` events with `toolName` and `status`, and a `completed` event. Tool events MUST NOT include tool arguments, results, or credentials. Model or platform failures after the stream has started SHALL emit an `error` event with code `AI_SERVICE_ERROR` and a client-safe message. The existing synchronous `POST /api/v1/ai/agent` SHALL remain available.
+
+#### Scenario: Valid streaming agent request
+- **WHEN** a client posts a valid agent request to `/api/v1/ai/agent/stream` and the model yields tokens
+- **THEN** the endpoint responds with SSE events `start`, one or more `delta`, and `completed`
+
+#### Scenario: Tool progress is visible without leaking payloads
+- **WHEN** the model executes `listTables` during a streaming agent request
+- **THEN** the stream emits `tool` events with `toolName=listTables` and `STARTED` then `SUCCESS` or `FAILURE`, and the payload does not contain table names or SQL
+
+#### Scenario: Streaming model failure is sanitized
+- **WHEN** the model fails after an agent stream has started
+- **THEN** the client receives an `error` event whose payload does not contain provider exception details
+
 ### Requirement: Tool and SQL audit logs
 The system SHALL log `conversationId`, `userId`, `datasourceId`, `database`, `requestId`, tool name, tool arguments needed for audit (including SQL), result status, duration, query row count when applicable, `executionId` when `executeQuery` sent one, and error message. Query result rows MUST NOT be persisted in this phase. Authorization tokens and other credentials MUST NOT appear in the audit line.
 

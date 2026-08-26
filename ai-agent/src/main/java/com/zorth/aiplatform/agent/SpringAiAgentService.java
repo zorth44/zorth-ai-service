@@ -1,6 +1,7 @@
 package com.zorth.aiplatform.agent;
 
 import com.zorth.aiplatform.agent.support.ToolContextKeys;
+import com.zorth.aiplatform.agent.support.ToolExecutionSupport;
 import com.zorth.aiplatform.agent.tool.CalculatorTools;
 import com.zorth.aiplatform.agent.tool.DatabaseTools;
 import com.zorth.aiplatform.agent.tool.DateTools;
@@ -19,6 +20,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.core.io.Resource;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 
 public final class SpringAiAgentService implements AiAgentService {
 
@@ -32,6 +37,7 @@ public final class SpringAiAgentService implements AiAgentService {
     private final CalculatorTools calculatorTools;
     private final SystemTools systemTools;
     private final DatabaseTools databaseTools;
+    private final ToolExecutionSupport executionSupport;
     private final Supplier<String> requestIdSupplier;
 
     public SpringAiAgentService(
@@ -42,7 +48,7 @@ public final class SpringAiAgentService implements AiAgentService {
             CalculatorTools calculatorTools,
             SystemTools systemTools) {
         this(chatClient, toolCallingAdvisor, systemPrompt, null, dateTools, calculatorTools,
-                systemTools, null, () -> UUID.randomUUID().toString());
+                systemTools, null, new ToolExecutionSupport(), () -> UUID.randomUUID().toString());
     }
 
     public SpringAiAgentService(
@@ -55,7 +61,23 @@ public final class SpringAiAgentService implements AiAgentService {
             SystemTools systemTools,
             DatabaseTools databaseTools) {
         this(chatClient, toolCallingAdvisor, systemPrompt, databaseSystemPrompt, dateTools,
-                calculatorTools, systemTools, databaseTools, () -> UUID.randomUUID().toString());
+                calculatorTools, systemTools, databaseTools, new ToolExecutionSupport(),
+                () -> UUID.randomUUID().toString());
+    }
+
+    public SpringAiAgentService(
+            ChatClient chatClient,
+            ToolCallingAdvisor toolCallingAdvisor,
+            Resource systemPrompt,
+            Resource databaseSystemPrompt,
+            DateTools dateTools,
+            CalculatorTools calculatorTools,
+            SystemTools systemTools,
+            DatabaseTools databaseTools,
+            ToolExecutionSupport executionSupport) {
+        this(chatClient, toolCallingAdvisor, systemPrompt, databaseSystemPrompt, dateTools,
+                calculatorTools, systemTools, databaseTools, executionSupport,
+                () -> UUID.randomUUID().toString());
     }
 
     SpringAiAgentService(
@@ -67,7 +89,7 @@ public final class SpringAiAgentService implements AiAgentService {
             SystemTools systemTools,
             Supplier<String> requestIdSupplier) {
         this(chatClient, toolCallingAdvisor, systemPrompt, null, dateTools, calculatorTools,
-                systemTools, null, requestIdSupplier);
+                systemTools, null, new ToolExecutionSupport(), requestIdSupplier);
     }
 
     SpringAiAgentService(
@@ -79,6 +101,22 @@ public final class SpringAiAgentService implements AiAgentService {
             CalculatorTools calculatorTools,
             SystemTools systemTools,
             DatabaseTools databaseTools,
+            Supplier<String> requestIdSupplier) {
+        this(chatClient, toolCallingAdvisor, systemPrompt, databaseSystemPrompt, dateTools,
+                calculatorTools, systemTools, databaseTools, new ToolExecutionSupport(),
+                requestIdSupplier);
+    }
+
+    SpringAiAgentService(
+            ChatClient chatClient,
+            ToolCallingAdvisor toolCallingAdvisor,
+            Resource systemPrompt,
+            Resource databaseSystemPrompt,
+            DateTools dateTools,
+            CalculatorTools calculatorTools,
+            SystemTools systemTools,
+            DatabaseTools databaseTools,
+            ToolExecutionSupport executionSupport,
             Supplier<String> requestIdSupplier) {
         this.chatClient = Objects.requireNonNull(chatClient, "chatClient must not be null");
         this.toolCallingAdvisor = Objects.requireNonNull(toolCallingAdvisor,
@@ -92,6 +130,8 @@ public final class SpringAiAgentService implements AiAgentService {
                 "calculatorTools must not be null");
         this.systemTools = Objects.requireNonNull(systemTools, "systemTools must not be null");
         this.databaseTools = databaseTools;
+        this.executionSupport = Objects.requireNonNull(executionSupport,
+                "executionSupport must not be null");
         this.requestIdSupplier = Objects.requireNonNull(requestIdSupplier,
                 "requestIdSupplier must not be null");
     }
@@ -114,12 +154,7 @@ public final class SpringAiAgentService implements AiAgentService {
                 value(request.database()));
 
         try {
-            String content = chatClient.prompt()
-                    .system(resolveSystemPrompt(databaseRequest))
-                    .user(request.message())
-                    .tools(resolveTools(databaseRequest))
-                    .toolContext(toolContext(requestId, request, safeRuntime))
-                    .advisors(toolCallingAdvisor)
+            String content = prompt(request, safeRuntime, requestId, databaseRequest)
                     .call()
                     .content();
 
@@ -141,6 +176,69 @@ public final class SpringAiAgentService implements AiAgentService {
                     requestId, elapsedMillis(startedAt), exception);
             throw new AiException("AI agent execution failed", exception);
         }
+    }
+
+    @Override
+    public Flux<AgentStreamEvent> stream(AgentRequest request) {
+        return stream(request, AgentRuntimeContext.none());
+    }
+
+    @Override
+    public Flux<AgentStreamEvent> stream(AgentRequest request, AgentRuntimeContext runtime) {
+        Objects.requireNonNull(request, "request must not be null");
+        AgentRuntimeContext safeRuntime = runtime == null ? AgentRuntimeContext.none() : runtime;
+
+        String requestId = requestIdSupplier.get();
+        String conversationId = request.conversationId();
+        int messageLength = request.message() == null ? 0 : request.message().length();
+        long startedAt = System.nanoTime();
+        boolean databaseRequest = request.datasourceId() != null && databaseTools != null;
+        log.info("Agent stream started requestId={} conversationId={} datasourceId={} database={} messageLength={}",
+                requestId, value(conversationId), value(request.datasourceId()),
+                value(request.database()), messageLength);
+
+        return Flux.defer(() -> {
+            Sinks.Many<AgentStreamEvent> toolSink = Sinks.many().unicast().onBackpressureBuffer();
+            AutoCloseable subscription = executionSupport.listen(requestId,
+                    (toolName, status) -> emitTool(toolSink, toolName, status));
+            Flux<AgentStreamEvent> tools = toolSink.asFlux();
+            Flux<AgentStreamEvent> tokens = Flux.defer(() -> prompt(
+                            request, safeRuntime, requestId, databaseRequest)
+                    .stream()
+                    .content()
+                    .filter(chunk -> chunk != null && !chunk.isEmpty())
+                    .map(AgentStreamEvent::delta))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .doFinally(signal -> {
+                        closeQuietly(subscription);
+                        toolSink.tryEmitComplete();
+                    });
+            Flux<AgentStreamEvent> live = Flux.merge(tools, tokens);
+            return Flux.concat(
+                    Mono.just(AgentStreamEvent.start(conversationId)),
+                    live,
+                    Mono.just(AgentStreamEvent.completed(conversationId)));
+        })
+                .doOnComplete(() -> log.info(
+                        "Agent stream succeeded requestId={} durationMs={} status=SUCCESS",
+                        requestId, elapsedMillis(startedAt)))
+                .doOnError(ex -> log.error(
+                        "Agent stream failed requestId={} durationMs={} status=FAILURE",
+                        requestId, elapsedMillis(startedAt), ex))
+                .onErrorResume(ex -> Flux.just(AgentStreamEvent.error()));
+    }
+
+    private ChatClient.ChatClientRequestSpec prompt(
+            AgentRequest request,
+            AgentRuntimeContext runtime,
+            String requestId,
+            boolean databaseRequest) {
+        return chatClient.prompt()
+                .system(resolveSystemPrompt(databaseRequest))
+                .user(request.message())
+                .tools(resolveTools(databaseRequest))
+                .toolContext(toolContext(requestId, request, runtime))
+                .advisors(toolCallingAdvisor);
     }
 
     private String resolveSystemPrompt(boolean databaseRequest) {
@@ -172,6 +270,23 @@ public final class SpringAiAgentService implements AiAgentService {
     private static void putIfPresent(Map<String, Object> context, String key, String value) {
         if (value != null) {
             context.put(key, value);
+        }
+    }
+
+    private static void emitTool(Sinks.Many<AgentStreamEvent> sink, String toolName, String status) {
+        Sinks.EmitResult result = sink.tryEmitNext(AgentStreamEvent.tool(toolName, status));
+        if (result.isFailure()) {
+            log.debug("Dropped tool stream event toolName={} status={} result={}",
+                    toolName, status, result);
+        }
+    }
+
+    private static void closeQuietly(AutoCloseable closeable) {
+        try {
+            closeable.close();
+        }
+        catch (Exception exception) {
+            log.debug("Failed to close tool execution listener", exception);
         }
     }
 

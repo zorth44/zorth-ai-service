@@ -2,6 +2,7 @@ package com.zorth.aiplatform.agent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.mock;
@@ -11,23 +12,30 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.zorth.aiplatform.agent.support.ToolContextKeys;
+import com.zorth.aiplatform.agent.support.ToolExecutionSupport;
 import com.zorth.aiplatform.agent.tool.CalculatorTools;
 import com.zorth.aiplatform.agent.tool.DatabaseTools;
 import com.zorth.aiplatform.agent.tool.DateTools;
 import com.zorth.aiplatform.agent.tool.SystemTools;
 import com.zorth.aiplatform.core.exception.AiException;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
+import reactor.core.publisher.Flux;
 
 class SpringAiAgentServiceTest {
 
     private ChatClient chatClient;
     private ChatClient.ChatClientRequestSpec requestSpec;
     private ChatClient.CallResponseSpec responseSpec;
+    private ChatClient.StreamResponseSpec streamSpec;
     private ToolCallingAdvisor toolCallingAdvisor;
     private Resource systemPrompt;
     private DateTools dateTools;
@@ -39,6 +47,7 @@ class SpringAiAgentServiceTest {
         chatClient = mock(ChatClient.class);
         requestSpec = mock(ChatClient.ChatClientRequestSpec.class, RETURNS_SELF);
         responseSpec = mock(ChatClient.CallResponseSpec.class);
+        streamSpec = mock(ChatClient.StreamResponseSpec.class);
         toolCallingAdvisor = ToolCallingAdvisor.builder().build();
         systemPrompt = new ClassPathResource("prompts/agent-system-prompt.txt");
         dateTools = mock(DateTools.class);
@@ -47,6 +56,7 @@ class SpringAiAgentServiceTest {
 
         when(chatClient.prompt()).thenReturn(requestSpec);
         when(requestSpec.call()).thenReturn(responseSpec);
+        when(requestSpec.stream()).thenReturn(streamSpec);
     }
 
     @Test
@@ -158,6 +168,134 @@ class SpringAiAgentServiceTest {
         assertThrows(AiException.class,
                 () -> serviceWithRequestId("request-123")
                         .execute(new AgentRequest("question")));
+    }
+
+    @Test
+    void streamsTokensThenCompletes() {
+        when(streamSpec.content()).thenReturn(Flux.just("你", "好"));
+
+        List<AgentStreamEvent> events = serviceWithRequestId("request-123")
+                .stream(new AgentRequest("hi", "conv-stream", null, null, null))
+                .collectList()
+                .block(Duration.ofSeconds(2));
+
+        assertEquals(List.of(
+                AgentStreamEvent.start("conv-stream"),
+                AgentStreamEvent.delta("你"),
+                AgentStreamEvent.delta("好"),
+                AgentStreamEvent.completed("conv-stream")), events);
+        verify(requestSpec).stream();
+    }
+
+    @Test
+    void emitsToolEventsDuringStreamWithoutToolArguments() {
+        ToolExecutionSupport executionSupport = new ToolExecutionSupport();
+        when(streamSpec.content()).thenReturn(Flux.defer(() -> {
+            executionSupport.execute(
+                    "listTables",
+                    new ToolContext(Map.of(ToolContextKeys.REQUEST_ID, "request-123")),
+                    () -> "ok");
+            return Flux.just("done");
+        }));
+        SpringAiAgentService service = new SpringAiAgentService(
+                chatClient,
+                toolCallingAdvisor,
+                systemPrompt,
+                null,
+                dateTools,
+                calculatorTools,
+                systemTools,
+                null,
+                executionSupport,
+                () -> "request-123");
+
+        List<AgentStreamEvent> events = service
+                .stream(new AgentRequest("列出表", "conv-1", "demo", "user-9", "orders"))
+                .collectList()
+                .block(Duration.ofSeconds(2));
+
+        assertEquals(List.of(
+                AgentStreamEvent.start("conv-1"),
+                AgentStreamEvent.tool("listTables", AgentStreamEvent.STATUS_STARTED),
+                AgentStreamEvent.tool("listTables", AgentStreamEvent.STATUS_SUCCESS),
+                AgentStreamEvent.delta("done"),
+                AgentStreamEvent.completed("conv-1")), events);
+        assertTrue(events.stream().noneMatch(event ->
+                event.content() != null && event.content().contains("ok")));
+    }
+
+    @Test
+    void streamFailureEmitsSanitizedErrorEvent() {
+        when(streamSpec.content())
+                .thenReturn(Flux.error(new IllegalStateException("secret provider detail")));
+
+        List<AgentStreamEvent> events = serviceWithRequestId("request-123")
+                .stream(new AgentRequest("hi"))
+                .collectList()
+                .block(Duration.ofSeconds(2));
+
+        assertEquals(List.of(
+                AgentStreamEvent.start(null),
+                AgentStreamEvent.error()), events);
+        assertTrue(events.stream().noneMatch(event ->
+                event.message() != null && event.message().contains("secret provider detail")));
+    }
+
+    @Test
+    void toolEventsAreEmittedBeforeModelTokensComplete() throws Exception {
+        ToolExecutionSupport executionSupport = new ToolExecutionSupport();
+        when(streamSpec.content()).thenReturn(Flux.<String>create(sink -> {
+            executionSupport.execute(
+                    "listTables",
+                    new ToolContext(Map.of(ToolContextKeys.REQUEST_ID, "request-123")),
+                    () -> "ok");
+            try {
+                Thread.sleep(250);
+            }
+            catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                sink.error(exception);
+                return;
+            }
+            sink.next("done");
+            sink.complete();
+        }));
+        SpringAiAgentService service = new SpringAiAgentService(
+                chatClient,
+                toolCallingAdvisor,
+                systemPrompt,
+                null,
+                dateTools,
+                calculatorTools,
+                systemTools,
+                null,
+                executionSupport,
+                () -> "request-123");
+
+        java.util.concurrent.CopyOnWriteArrayList<AgentStreamEvent> seen =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        reactor.core.Disposable disposable = service
+                .stream(new AgentRequest("列出表", "conv-1", "demo", "user-9", "orders"))
+                .subscribe(seen::add);
+
+        boolean toolsBeforeAnswer = false;
+        for (int i = 0; i < 40; i++) {
+            boolean hasTool = seen.stream().anyMatch(event -> AgentStreamEvent.TYPE_TOOL.equals(event.type()));
+            boolean hasDelta = seen.stream().anyMatch(event -> AgentStreamEvent.TYPE_DELTA.equals(event.type()));
+            if (hasTool && !hasDelta) {
+                toolsBeforeAnswer = true;
+                break;
+            }
+            Thread.sleep(25);
+        }
+        assertTrue(toolsBeforeAnswer);
+        for (int i = 0; i < 40; i++) {
+            if (seen.stream().anyMatch(event -> AgentStreamEvent.TYPE_COMPLETED.equals(event.type()))) {
+                break;
+            }
+            Thread.sleep(25);
+        }
+        disposable.dispose();
     }
 
     private SpringAiAgentService serviceWithRequestId(String requestId) {

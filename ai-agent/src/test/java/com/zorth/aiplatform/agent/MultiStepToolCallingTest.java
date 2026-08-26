@@ -9,6 +9,7 @@ import com.zorth.aiplatform.agent.tool.CalculatorTools;
 import com.zorth.aiplatform.agent.tool.DateTools;
 import com.zorth.aiplatform.agent.tool.SystemTools;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -26,6 +27,7 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.core.io.ClassPathResource;
+import reactor.core.publisher.Flux;
 
 class MultiStepToolCallingTest {
 
@@ -55,6 +57,41 @@ class MultiStepToolCallingTest {
         assertEquals("There are 133 days until 2027-01-01.", response.content());
     }
 
+    @Test
+    void streamEmitsToolProgressThenFinalAnswer() {
+        ScriptedMultiStepChatModel chatModel = new ScriptedMultiStepChatModel();
+        ToolExecutionSupport executionSupport = new ToolExecutionSupport();
+        DateTools dateTools = new DateTools(
+                Clock.fixed(Instant.parse("2026-08-21T12:00:00Z"), ZoneOffset.UTC),
+                executionSupport);
+        CalculatorTools calculatorTools = new CalculatorTools(executionSupport);
+        SystemTools systemTools = new SystemTools(
+                new SystemInfo("ai-platform", "test", "test-version"), executionSupport);
+        SpringAiAgentService service = new SpringAiAgentService(
+                ChatClient.create(chatModel),
+                ToolCallingAdvisor.builder().build(),
+                new ClassPathResource("prompts/agent-system-prompt.txt"),
+                null,
+                dateTools,
+                calculatorTools,
+                systemTools,
+                null,
+                executionSupport,
+                () -> "multi-step-stream");
+
+        List<AgentStreamEvent> events = service
+                .stream(new AgentRequest("How many days until 2027-01-01?"))
+                .collectList()
+                .block(Duration.ofSeconds(2));
+
+        assertEquals(3, chatModel.calls());
+        assertTrue(events.contains(AgentStreamEvent.tool("getCurrentDate", AgentStreamEvent.STATUS_STARTED)));
+        assertTrue(events.contains(AgentStreamEvent.tool("getCurrentDate", AgentStreamEvent.STATUS_SUCCESS)));
+        assertTrue(events.contains(AgentStreamEvent.tool("calculateDaysBetween", AgentStreamEvent.STATUS_STARTED)));
+        assertTrue(events.contains(AgentStreamEvent.delta("There are 133 days until 2027-01-01.")));
+        assertEquals(AgentStreamEvent.completed(null), events.get(events.size() - 1));
+    }
+
     private static final class ScriptedMultiStepChatModel implements ChatModel {
 
         private final AtomicInteger calls = new AtomicInteger();
@@ -78,6 +115,11 @@ class MultiStepToolCallingTest {
                 }
                 default -> throw new AssertionError("Unexpected model call " + call);
             };
+        }
+
+        @Override
+        public Flux<ChatResponse> stream(Prompt prompt) {
+            return Flux.just(call(prompt));
         }
 
         @Override

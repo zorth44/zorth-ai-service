@@ -235,6 +235,40 @@ curl \
 }
 ```
 
+流式接口 `POST /api/v1/ai/agent/stream` 与 `/chat/stream` 一样返回 SSE：`start`、若干 `delta`、`completed`。Tool 执行时额外发 `tool` 事件（只有 `toolName` 和 `status`，不含参数和结果）。同步 `POST /api/v1/ai/agent` 仍然可用。
+
+```bash
+curl \
+  -N \
+  -X POST \
+  http://localhost:8080/api/v1/ai/agent/stream \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{
+    "message": "列出订单",
+    "conversationId": "tab-1",
+    "datasourceId": "demo",
+    "database": "orders"
+  }'
+```
+
+```text
+event:start
+data:{"type":"start","conversationId":"tab-1"}
+
+event:tool
+data:{"type":"tool","toolName":"listTables","status":"STARTED"}
+
+event:tool
+data:{"type":"tool","toolName":"listTables","status":"SUCCESS"}
+
+event:delta
+data:{"type":"delta","content":"可以用"}
+
+event:completed
+data:{"type":"completed","conversationId":"tab-1"}
+```
+
 当前 Agent 固定注册以下基础 Tool：
 
 | Tool | 用途 | 结构化结果 |
