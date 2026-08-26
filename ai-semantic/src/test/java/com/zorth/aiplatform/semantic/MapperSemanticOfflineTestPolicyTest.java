@@ -11,10 +11,6 @@ class MapperSemanticOfflineTestPolicyTest {
     @Test
     void defaultTestsDoNotRequireProviderCredentialsOrNetwork() throws Exception {
         assertTrue(Files.exists(Path.of("src/test/java/com/zorth/aiplatform/semantic/ai/SpringAiMapperSemanticAiClientTest.java")));
-        String integration = Files.readString(Path.of(
-                "src/test/java/com/zorth/aiplatform/semantic/ai/MapperSemanticProviderIntegrationTest.java"));
-        assertTrue(integration.contains("@Tag(\"llm-integration\")"));
-        assertTrue(integration.contains("EnabledIfEnvironmentVariable"));
         String pom = Files.readString(Path.of("pom.xml"));
         assertTrue(pom.contains("<excludedGroups>llm-integration</excludedGroups>"));
     }

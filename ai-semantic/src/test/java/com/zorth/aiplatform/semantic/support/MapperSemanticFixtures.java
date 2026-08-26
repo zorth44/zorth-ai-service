@@ -13,6 +13,7 @@ import com.zorth.aiplatform.semantic.model.RelationshipSemantic;
 import com.zorth.aiplatform.semantic.model.SemanticEvidence;
 import com.zorth.aiplatform.semantic.model.SqlOperation;
 import com.zorth.aiplatform.semantic.model.TableRef;
+import com.zorth.aiplatform.semantic.model.TableKind;
 import com.zorth.aiplatform.semantic.scan.MapperPreflightResult;
 import java.util.List;
 
@@ -38,10 +39,10 @@ public final class MapperSemanticFixtures {
                 statementId,
                 SqlOperation.SELECT,
                 "Select one order",
-                List.of(new TableRef("t_order", "o")),
+                List.of(new TableRef("t_order", "o", TableKind.PHYSICAL)),
                 List.of(new ColumnRef("t_order", "id", null, ColumnUsage.SELECT)),
                 List.of(),
-                List.of(new FilterSemantic("o.id = #{id}", "t_order", "id", "=", "#{id}", null, 1.0d)),
+                List.of(new FilterSemantic("o.id = #{id}", "t_order", "id", "=", "#{id}", 1.0d)),
                 List.of(),
                 List.of(),
                 List.of(),
@@ -55,7 +56,7 @@ public final class MapperSemanticFixtures {
                 statementId,
                 operation,
                 operation.name() + " statement",
-                List.of(new TableRef("t_order", null)),
+                List.of(new TableRef("t_order", null, TableKind.PHYSICAL)),
                 List.of(new ColumnRef("t_order", "id", null, ColumnUsage.UNKNOWN)),
                 List.of(),
                 List.of(),

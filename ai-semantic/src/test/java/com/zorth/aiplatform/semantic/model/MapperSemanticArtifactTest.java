@@ -13,6 +13,7 @@ import java.lang.reflect.RecordComponent;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import org.springframework.ai.converter.BeanOutputConverter;
 import org.junit.jupiter.api.Test;
 
 class MapperSemanticArtifactTest {
@@ -45,6 +46,7 @@ class MapperSemanticArtifactTest {
         assertEquals("LEFT_JOIN", node.get("joinType").asText());
         assertEquals("SELECT", objectMapper.valueToTree(ColumnUsage.SELECT).asText());
         assertEquals("UNKNOWN", objectMapper.valueToTree(SqlOperation.UNKNOWN).asText());
+        assertEquals("DERIVED", objectMapper.valueToTree(TableKind.DERIVED).asText());
         assertEquals("UNRESOLVED_INCLUDE", objectMapper.valueToTree(EvidenceType.UNRESOLVED_INCLUDE).asText());
     }
 
@@ -62,8 +64,8 @@ class MapperSemanticArtifactTest {
 
     @Test
     void confidenceBoundariesAreRepresentable() {
-        FilterSemantic min = new FilterSemantic("1=1", null, null, "=", "1", null, 0.0d);
-        FilterSemantic max = new FilterSemantic("1=1", null, null, "=", "1", null, 1.0d);
+        FilterSemantic min = new FilterSemantic("1=1", null, null, "=", "1", 0.0d);
+        FilterSemantic max = new FilterSemantic("1=1", null, null, "=", "1", 1.0d);
         assertEquals(0.0d, min.confidence());
         assertEquals(1.0d, max.confidence());
     }
@@ -115,11 +117,13 @@ class MapperSemanticArtifactTest {
                         "queryUserOrders",
                         SqlOperation.SELECT,
                         "Query user orders",
-                        List.of(new TableRef("t_order", "o"), new TableRef("t_user", "u")),
+                        List.of(
+                                new TableRef("t_order", "o", TableKind.PHYSICAL),
+                                new TableRef("t_user", "u", TableKind.PHYSICAL)),
                         List.of(new ColumnRef("t_order", "amount", null, ColumnUsage.SELECT)),
                         List.of(MapperSemanticFixtures.leftJoin()),
                         List.of(new FilterSemantic(
-                                "o.status = '03'", "t_order", "status", "=", "03", null, 1.0d)),
+                                "o.status = '03'", "t_order", "status", "=", "03", 1.0d)),
                         List.of(MapperSemanticFixtures.startTimeFilter()),
                         List.of(),
                         List.of("o.create_time DESC"),
@@ -141,5 +145,58 @@ class MapperSemanticArtifactTest {
         ColumnRef column = new ColumnRef(null, "amount", null, ColumnUsage.UNKNOWN);
         assertNull(column.table());
         assertEquals(ColumnUsage.UNKNOWN, column.usage());
+    }
+
+    @Test
+    void productionStructuredOutputSchemaDescribesFieldsAndMarksNullableScalarsOptional() throws Exception {
+        JsonNode schema = objectMapper.readTree(new BeanOutputConverter<>(MapperSemantic.class).getJsonSchema());
+        JsonNode tableRef = findObjectWithProperties(schema, "table", "alias", "kind");
+        assertTrue(tableRef.isObject());
+        assertFalse(requiredNames(tableRef).contains("table"));
+        assertFalse(requiredNames(tableRef).contains("alias"));
+        assertTrue(requiredNames(tableRef).contains("kind"));
+
+        JsonNode dynamicFilter = findObjectWithProperties(schema, "parameter", "expression", "condition");
+        assertTrue(dynamicFilter.path("properties").path("expression").path("description").asText()
+                .contains("SQL fragment only"));
+        assertTrue(dynamicFilter.path("properties").path("condition").path("description").asText()
+                .contains("MyBatis/OGNL guard only"));
+        assertFalse(schema.toString().contains("possibleMeaning"));
+        assertEveryPropertyHasDescription(schema);
+    }
+
+    private static JsonNode findObjectWithProperties(JsonNode node, String... names) {
+        if (node.isObject() && node.has("properties")) {
+            JsonNode properties = node.path("properties");
+            if (Arrays.stream(names).allMatch(properties::has)) {
+                return node;
+            }
+        }
+        for (JsonNode child : node) {
+            JsonNode found = findObjectWithProperties(child, names);
+            if (!found.isMissingNode()) {
+                return found;
+            }
+        }
+        return com.fasterxml.jackson.databind.node.MissingNode.getInstance();
+    }
+
+    private static List<String> requiredNames(JsonNode objectSchema) {
+        return java.util.stream.StreamSupport.stream(
+                        objectSchema.path("required").spliterator(), false)
+                .map(JsonNode::asText)
+                .toList();
+    }
+
+    private static void assertEveryPropertyHasDescription(JsonNode node) {
+        if (node.isObject() && node.has("properties")) {
+            node.path("properties").properties().forEach(entry -> assertTrue(
+                    entry.getValue().hasNonNull("description")
+                            && !entry.getValue().path("description").asText().isBlank(),
+                    () -> "Missing schema description for " + entry.getKey()));
+        }
+        for (JsonNode child : node) {
+            assertEveryPropertyHasDescription(child);
+        }
     }
 }

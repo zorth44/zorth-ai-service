@@ -329,18 +329,23 @@ public record TableRef(
 
         String table,
 
-        String alias
+        String alias,
+
+        TableKind kind
 
 ) {
 }
 ```
+
+`kind` 取值为 `PHYSICAL`、`DERIVED`、`CTE` 或 `UNKNOWN`。物理表和 CTE 的 `table` 是可见名称；派生表的 `table` 必须为 `null`，`alias` 必须保留子查询的可见别名。未知关系至少保留一个源代码中可见的 `table` 或 `alias`，禁止发明 `derived_union` 一类描述性表名。
 
 示例：
 
 ```json
 {
   "table": "t_order",
-  "alias": "o"
+  "alias": "o",
+  "kind": "PHYSICAL"
 }
 ```
 
@@ -349,7 +354,18 @@ public record TableRef(
 ```json
 {
   "table": "t_order",
-  "alias": null
+  "alias": null,
+  "kind": "PHYSICAL"
+}
+```
+
+派生关系示例：
+
+```json
+{
+  "table": null,
+  "alias": "bn",
+  "kind": "DERIVED"
 }
 ```
 
@@ -485,8 +501,6 @@ public record FilterSemantic(
 
         String value,
 
-        String possibleMeaning,
-
         double confidence
 
 ) {
@@ -508,10 +522,11 @@ WHERE o.status = '03'
   "column": "status",
   "operator": "=",
   "value": "03",
-  "possibleMeaning": null,
   "confidence": 1.0
 }
 ```
+
+`FilterSemantic` 只保存事实，不再保存推断字段。如果 Mapper 方法名、注释或命名片段支持非平凡业务推断，应只写入 `BusinessMeaning`，并提供独立的 `INFERENCE` evidence。普通 CRUD 转述应省略。
 
 如果 Mapper 方法叫：
 
@@ -519,18 +534,20 @@ WHERE o.status = '03'
 queryCompletedOrders
 ```
 
-模型可能推断：
+模型在证据充分时可能推断：
 
 ```json
 {
-  "possibleMeaning": "已完成订单",
+  "name": "已完成订单",
+  "description": "该查询可能用于查询已完成状态的订单",
+  "derivedFrom": "statement id=queryCompletedOrders and fixed filter status='03'",
   "confidence": 0.75
 }
 ```
 
 注意：
 
-> `possibleMeaning` 必须明确是推断信息。
+> 所有推断只允许出现在 `BusinessMeaning`；置信度达到 `0.9` 必须有注释或命名 SQL 片段等明确强证据。
 
 绝对不能因为看到：
 
@@ -592,6 +609,8 @@ public record DynamicFilterSemantic(
   "confidence": 1.0
 }
 ```
+
+这里 `expression` 只能包含动态标签产生的 SQL 片段，`condition` 只能包含 `test` 中的 MyBatis/OGNL 条件；完整 `<if>`、`<when>` 或 `<foreach>` XML 只能保留在 `DYNAMIC_XML` evidence 中，不能放进这两个字段。
 
 必须支持识别常见 MyBatis 标签：
 
@@ -750,11 +769,13 @@ public record SemanticEvidence(
       "tables": [
         {
           "table": "t_order",
-          "alias": "o"
+          "alias": "o",
+          "kind": "PHYSICAL"
         },
         {
           "table": "t_user",
-          "alias": "u"
+          "alias": "u",
+          "kind": "PHYSICAL"
         }
       ],
       "columns": [
@@ -795,7 +816,6 @@ public record SemanticEvidence(
           "column": "status",
           "operator": "=",
           "value": "03",
-          "possibleMeaning": null,
           "confidence": 1.0
         }
       ],
@@ -1694,7 +1714,11 @@ SpringAiMapperSemanticAiClient
 
 测试。
 
-只有明确配置 API Key 时才运行。
+测试位于 `ai-server`，只有明确激活 `llm-integration` Maven profile，并配置 `AI_API_KEY`、`SEMANTIC_MAPPER_SOURCE`、`SEMANTIC_MAPPER_OUTPUT` 时才运行。它必须调用生产装配的 `MapperSemanticGenerator`、校验报告不变量，并回读 schema `1.1` artifact；缺少环境变量时应清晰跳过。
+
+```bash
+mvn -pl ai-server -am -Pllm-integration test
+```
 
 不能让：
 

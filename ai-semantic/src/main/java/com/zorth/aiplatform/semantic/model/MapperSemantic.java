@@ -1,18 +1,22 @@
 package com.zorth.aiplatform.semantic.model;
 
+import com.fasterxml.jackson.annotation.JsonPropertyDescription;
 import java.util.ArrayList;
 import java.util.List;
 
 public record MapperSemantic(
-        String schemaVersion,
-        String sourceHash,
-        String mapperName,
-        String namespace,
-        String sourceFile,
-        String summary,
-        List<MapperStatementSemantic> statements) {
+        @JsonPropertyDescription("Artifact contract version; must be 1.1.") String schemaVersion,
+        @JsonPropertyDescription("Lowercase SHA-256 digest of the original Mapper XML bytes.") String sourceHash,
+        @JsonPropertyDescription("Mapper file name without the .xml suffix, for example OrderMapper.") String mapperName,
+        @JsonPropertyDescription("Exact namespace declared by the Mapper XML root element.") String namespace,
+        @JsonPropertyDescription("Normalized source-root-relative Mapper XML path; never an absolute path.")
+                String sourceFile,
+        @JsonPropertyDescription("Concise factual summary of the Mapper without unsupported business inference.")
+                String summary,
+        @JsonPropertyDescription("Semantics for every top-level select, insert, update, and delete exactly once.")
+                List<MapperStatementSemantic> statements) {
 
-    public static final String SCHEMA_VERSION = "1.0";
+    public static final String SCHEMA_VERSION = "1.1";
 
     public MapperSemantic withTrustedProvenance(String sourceHash, String sourceFile) {
         List<MapperStatementSemantic> rewritten = new ArrayList<>();

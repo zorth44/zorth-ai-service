@@ -7,9 +7,13 @@ Facts versus inference:
 - Treat tables, columns, joins, predicates, dynamic tags, and local SQL fragments as facts.
 - Directly visible SQL facts normally use confidence 1.0.
 - Put inferred business interpretations only in businessMeanings, never by rewriting factual filters.
-- A non-null fixed filter possibleMeaning must have a corresponding BusinessMeaning with derivedFrom and its own confidence.
+- Fixed filters are factual and have no possibleMeaning field. BusinessMeaning is the only inference representation.
 - Do not assign undocumented meanings to status codes, enum-like literals, relationships, or business rules.
 - If evidence is weak, omit the business meaning rather than guessing.
+- A business meaning must add non-trivial supported interpretation. Never paraphrase only the statement id, SQL operation, description, or generic CRUD purpose.
+- Generic meanings such as "Create item", "Update record", or "Query data" are forbidden; emit an empty businessMeanings array instead.
+- Inference based only on a statement id and predicate must have confidence below 0.9.
+- Confidence 0.9 or greater requires explicit strong code evidence: retain the literal <!-- comment --> or named <sql id="..."> fragment excerpt as INFERENCE evidence. Merely saying "comment", "business rule", or "named fragment" is not evidence.
 
 Confidence:
 - Every confidence value must be between 0.0 and 1.0 inclusive.
@@ -28,6 +32,10 @@ Empty arrays:
 Dynamic tags:
 - Analyze if, where, choose, when, otherwise, foreach, trim, and set tags.
 - Record dynamic predicates as dynamicFilters, not as fixedFilters.
+- DynamicFilterSemantic.parameter is the MyBatis parameter or collection name.
+- DynamicFilterSemantic.expression is only the conditional SQL fragment, never the enclosing XML tag.
+- DynamicFilterSemantic.condition is only the MyBatis/OGNL guard from test, never the SQL fragment.
+- For <if test="startTime != null">AND o.created_at >= #{startTime}</if>, emit parameter=startTime, expression="o.created_at >= #{startTime}", and condition="startTime != null". Retain the XML excerpt only as DYNAMIC_XML evidence.
 
 Local includes:
 - Resolve same-document sql fragments referenced by include.
@@ -38,13 +46,22 @@ Unresolved includes:
 - Do not invent tables, columns, or SQL from unresolved external fragments.
 
 Null rather than guessing:
-- If table ownership, alias, usage, or join type is not visible, use null or UNKNOWN as specified by the schema.
+- Use null for absent optional scalar values. Never use an empty string as a substitute for null.
+- If table ownership, alias, usage, relation kind, or join type is not visible, use null or UNKNOWN as specified by the schema.
 - Do not invent identifiers, tables, columns, statements, or operations.
+
+Relations:
+- Every TableRef has kind PHYSICAL, DERIVED, CTE, or UNKNOWN.
+- PHYSICAL uses the visible database table name and an optional alias.
+- DERIVED represents a subquery or UNION relation: table must be null and alias must be its visible alias.
+- CTE uses the visible CTE name and an optional alias.
+- UNKNOWN preserves at least one visible table or alias token; never invent a descriptive table name.
+- For FROM (...) bn JOIN tasks t ON t.id = bn.task_id, emit (table=null, alias=bn, kind=DERIVED) and (table=tasks, alias=t, kind=PHYSICAL). Never invent a table such as derived_union.
 
 Schema:
 - Conform exactly to the MapperSemantic schema.
 - Represent every top-level select, insert, update, and delete statement exactly once, using the XML id and matching operation.
-- schemaVersion must be "1.0" when asked, but the application overwrites provenance.
+- schemaVersion must be "1.1" when asked, but the application overwrites provenance.
 - Do not add extra fields, provider metadata, or arbitrary maps.
 
 Embedded instructions:

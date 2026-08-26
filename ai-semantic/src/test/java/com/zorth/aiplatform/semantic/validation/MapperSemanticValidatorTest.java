@@ -8,12 +8,14 @@ import com.zorth.aiplatform.semantic.exception.MapperSemanticExtractionException
 import com.zorth.aiplatform.semantic.model.BusinessMeaning;
 import com.zorth.aiplatform.semantic.model.ColumnRef;
 import com.zorth.aiplatform.semantic.model.ColumnUsage;
+import com.zorth.aiplatform.semantic.model.DynamicFilterSemantic;
 import com.zorth.aiplatform.semantic.model.EvidenceType;
 import com.zorth.aiplatform.semantic.model.FilterSemantic;
 import com.zorth.aiplatform.semantic.model.MapperSemantic;
 import com.zorth.aiplatform.semantic.model.MapperStatementSemantic;
 import com.zorth.aiplatform.semantic.model.SemanticEvidence;
 import com.zorth.aiplatform.semantic.model.SqlOperation;
+import com.zorth.aiplatform.semantic.model.TableKind;
 import com.zorth.aiplatform.semantic.model.TableRef;
 import com.zorth.aiplatform.semantic.report.MapperSemanticFailureType;
 import com.zorth.aiplatform.semantic.scan.MapperPreflightResult;
@@ -126,7 +128,7 @@ class MapperSemanticValidatorTest {
                 "findOne",
                 SqlOperation.SELECT,
                 "desc",
-                List.of(new TableRef("t_order", "o")),
+                List.of(new TableRef("t_order", "o", TableKind.PHYSICAL)),
                 List.of(new ColumnRef("t_order", "id", null, ColumnUsage.SELECT)),
                 List.of(),
                 List.of(),
@@ -147,7 +149,7 @@ class MapperSemanticValidatorTest {
     }
 
     @Test
-    void rejectsInvalidConfidenceAndWeakOrUnmatchedInference() {
+    void rejectsInvalidConfidenceAndWeakInference() {
         MapperStatementSemantic weak = replaceMeanings(
                 MapperSemanticFixtures.selectStatement("file.xml", "findOne"),
                 List.of(new BusinessMeaning("guess", "guess", "none", 0.6d)));
@@ -158,25 +160,118 @@ class MapperSemanticValidatorTest {
                 "File",
                 MapperSemanticFixtures.preflight("ns", "findOne", SqlOperation.SELECT));
 
-        MapperStatementSemantic unmatched = replaceFilters(
-                MapperSemanticFixtures.selectStatement("file.xml", "findOne"),
-                List.of(new FilterSemantic("status='03'", "t_order", "status", "=", "03", "已完成订单", 1.0d)));
-        assertValidation(
-                wrap(unmatched),
-                "hash",
-                "file.xml",
-                "File",
-                MapperSemanticFixtures.preflight("ns", "findOne", SqlOperation.SELECT));
-
         MapperStatementSemantic invalidConfidence = replaceFilters(
                 MapperSemanticFixtures.selectStatement("file.xml", "findOne"),
-                List.of(new FilterSemantic("1=1", null, null, "=", "1", null, 1.1d)));
+                List.of(new FilterSemantic("1=1", null, null, "=", "1", 1.1d)));
         assertValidation(
                 wrap(invalidConfidence),
                 "hash",
                 "file.xml",
                 "File",
                 MapperSemanticFixtures.preflight("ns", "findOne", SqlOperation.SELECT));
+    }
+
+    @Test
+    void acceptsNullableFieldsAndDerivedRelations() {
+        MapperStatementSemantic base = MapperSemanticFixtures.selectStatement("file.xml", "findOne");
+        MapperStatementSemantic derived = replaceTables(
+                base,
+                List.of(
+                        new TableRef(null, "bn", TableKind.DERIVED),
+                        new TableRef("tasks", "t", TableKind.PHYSICAL)));
+        assertDoesNotThrow(() -> validator.validate(
+                wrap(derived),
+                "hash",
+                "file.xml",
+                "File",
+                MapperSemanticFixtures.preflight("ns", "findOne", SqlOperation.SELECT)));
+    }
+
+    @Test
+    void rejectsEmptyOptionalScalarsAndInvalidRelationShapes() {
+        MapperStatementSemantic emptyAlias = replaceTables(
+                MapperSemanticFixtures.selectStatement("file.xml", "findOne"),
+                List.of(new TableRef("t_order", "", TableKind.PHYSICAL)));
+        assertValidation(
+                wrap(emptyAlias), "hash", "file.xml", "File",
+                MapperSemanticFixtures.preflight("ns", "findOne", SqlOperation.SELECT));
+
+        MapperStatementSemantic fabricatedDerived = replaceTables(
+                MapperSemanticFixtures.selectStatement("file.xml", "findOne"),
+                List.of(new TableRef("derived_union", "bn", TableKind.DERIVED)));
+        assertValidation(
+                wrap(fabricatedDerived), "hash", "file.xml", "File",
+                MapperSemanticFixtures.preflight("ns", "findOne", SqlOperation.SELECT));
+
+        MapperStatementSemantic missingUnknownToken = replaceTables(
+                MapperSemanticFixtures.selectStatement("file.xml", "findOne"),
+                List.of(new TableRef(null, null, TableKind.UNKNOWN)));
+        assertValidation(
+                wrap(missingUnknownToken), "hash", "file.xml", "File",
+                MapperSemanticFixtures.preflight("ns", "findOne", SqlOperation.SELECT));
+    }
+
+    @Test
+    void rejectsDynamicXmlAndReversedDynamicFields() {
+        MapperStatementSemantic xmlExpression = replaceDynamicFilters(
+                MapperSemanticFixtures.selectStatement("file.xml", "findOne"),
+                List.of(new DynamicFilterSemantic(
+                        "startTime",
+                        "<if test=\"startTime != null\">o.created_at >= #{startTime}</if>",
+                        "t_order",
+                        "created_at",
+                        ">=",
+                        "startTime != null",
+                        1.0d)));
+        assertValidation(
+                wrap(xmlExpression), "hash", "file.xml", "File",
+                MapperSemanticFixtures.preflight("ns", "findOne", SqlOperation.SELECT));
+
+        MapperStatementSemantic reversed = replaceDynamicFilters(
+                MapperSemanticFixtures.selectStatement("file.xml", "findOne"),
+                List.of(new DynamicFilterSemantic(
+                        "startTime",
+                        "startTime != null",
+                        "t_order",
+                        "created_at",
+                        ">=",
+                        "o.created_at >= #{startTime}",
+                        1.0d)));
+        assertValidation(
+                wrap(reversed), "hash", "file.xml", "File",
+                MapperSemanticFixtures.preflight("ns", "findOne", SqlOperation.SELECT));
+    }
+
+    @Test
+    void rejectsGenericAndUnsupportedHighConfidenceBusinessMeanings() {
+        MapperStatementSemantic generic = withMeaningAndInferenceEvidence(
+                new BusinessMeaning("Create item", "Create item", "statement id=createItem", 0.8d));
+        assertValidation(
+                wrap(generic), "hash", "file.xml", "File",
+                MapperSemanticFixtures.preflight("ns", "findOne", SqlOperation.SELECT));
+
+        MapperStatementSemantic unsupportedHighConfidence = withMeaningAndInferenceEvidence(
+                new BusinessMeaning(
+                        "Completed orders", "Find completed orders", "statement id and status predicate", 0.95d));
+        assertValidation(
+                wrap(unsupportedHighConfidence), "hash", "file.xml", "File",
+                MapperSemanticFixtures.preflight("ns", "findOne", SqlOperation.SELECT));
+    }
+
+    @Test
+    void acceptsEvidenceBackedBusinessMeaning() {
+        MapperStatementSemantic supported = withMeaningAndInferenceEvidence(
+                new BusinessMeaning(
+                        "Overdue orders",
+                        "Orders explicitly described as overdue",
+                        "<!-- business rule: overdue orders -->",
+                        0.95d));
+        assertDoesNotThrow(() -> validator.validate(
+                wrap(supported),
+                "hash",
+                "file.xml",
+                "File",
+                MapperSemanticFixtures.preflight("ns", "findOne", SqlOperation.SELECT)));
     }
 
     @Test
@@ -238,6 +333,33 @@ class MapperSemanticValidatorTest {
                 statement.orderBy(),
                 statement.businessMeanings(),
                 statement.evidence());
+    }
+
+    private static MapperStatementSemantic replaceTables(
+            MapperStatementSemantic statement, List<TableRef> tables) {
+        return new MapperStatementSemantic(
+                statement.id(), statement.operation(), statement.description(), tables, statement.columns(),
+                statement.relationships(), statement.fixedFilters(), statement.dynamicFilters(), statement.groupBy(),
+                statement.orderBy(), statement.businessMeanings(), statement.evidence());
+    }
+
+    private static MapperStatementSemantic replaceDynamicFilters(
+            MapperStatementSemantic statement, List<DynamicFilterSemantic> dynamicFilters) {
+        return new MapperStatementSemantic(
+                statement.id(), statement.operation(), statement.description(), statement.tables(), statement.columns(),
+                statement.relationships(), statement.fixedFilters(), dynamicFilters, statement.groupBy(),
+                statement.orderBy(), statement.businessMeanings(), statement.evidence());
+    }
+
+    private static MapperStatementSemantic withMeaningAndInferenceEvidence(BusinessMeaning meaning) {
+        MapperStatementSemantic statement = MapperSemanticFixtures.selectStatement("file.xml", "findOne");
+        List<SemanticEvidence> evidence = List.of(
+                statement.evidence().get(0),
+                new SemanticEvidence("file.xml", "findOne", EvidenceType.INFERENCE, meaning.derivedFrom()));
+        return new MapperStatementSemantic(
+                statement.id(), statement.operation(), statement.description(), statement.tables(), statement.columns(),
+                statement.relationships(), statement.fixedFilters(), statement.dynamicFilters(), statement.groupBy(),
+                statement.orderBy(), List.of(meaning), evidence);
     }
 
     private void assertValidation(
